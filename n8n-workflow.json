@@ -1,0 +1,390 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "triggerAtDay": 0,
+              "triggerAtHour": 2
+            }
+          ]
+        }
+      },
+      "id": "7531dc2f-c91c-4779-965e-47d67defd246",
+      "name": "Weekly Sync Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [-752, -160],
+      "typeVersion": 1.2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/api/sync",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"triggeredBy\": \"n8n\"\n}",
+        "options": {
+          "timeout": 600000
+        }
+      },
+      "id": "24336cbc-8752-4726-bbb8-4cc67fe99e6a",
+      "name": "Sync All Brands",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [-496, -160],
+      "typeVersion": 4.4
+    },
+    {
+      "parameters": {
+        "formTitle": "Upload RFP Document",
+        "formDescription": "Upload an Excel (.xlsx) RFP file to automatically match products from our database and generate a presentation.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "RFP File",
+              "fieldType": "file",
+              "requiredField": true,
+              "acceptFileTypes": ".xlsx,.xls"
+            },
+            {
+              "fieldLabel": "Client Name",
+              "fieldType": "text",
+              "requiredField": true,
+              "placeholder": "Enter client name"
+            },
+            {
+              "fieldLabel": "Confidence Threshold",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  { "option": "0.4 - Broad (Recommended)" },
+                  { "option": "0.5 - Balanced" },
+                  { "option": "0.55 - Moderate" },
+                  { "option": "0.65 - Strict (fewer matches)" }
+                ]
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "22e0d5f0-dc2b-4451-9f84-a4d0b7a08d37",
+      "name": "Upload RFP Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "position": [-752, 48],
+      "typeVersion": 2.2,
+      "webhookId": "rfp-upload"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract binary file data and form fields\nconst formData = $input.first().json;\nconst clientName = formData['Client Name'] || 'Client';\nconst thresholdOption = formData['Confidence Threshold'] || '0.4 - Broad (Recommended)';\nconst threshold = thresholdOption.split(' - ')[0] || '0.4';\n\n// Get the uploaded file binary key\nconst binaryKey = Object.keys($input.first().binary || {})[0];\nif (!binaryKey) {\n  throw new Error('No file uploaded. Please upload an Excel file.');\n}\nconst binaryMeta = $input.first().binary[binaryKey];\n\n// Use n8n helper to get actual binary buffer (works with filesystem storage mode)\nconst buffer = await this.helpers.getBinaryDataBuffer(0, binaryKey);\nconst fileBase64 = buffer.toString('base64');\n\nif (fileBase64.length < 100) {\n  throw new Error('File data too small (' + fileBase64.length + ' chars). Upload may have failed.');\n}\n\nreturn [{\n  json: {\n    fileBase64: fileBase64,\n    fileName: binaryMeta.fileName || 'upload.xlsx',\n    threshold: threshold,\n    limit: 3,\n    client_name: clientName\n  }\n}];"
+      },
+      "id": "4401287a-3ecf-49b3-bfc2-abe48133d434",
+      "name": "Prepare RFP Data",
+      "type": "n8n-nodes-base.code",
+      "position": [-496, 48],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/api/rfp/process-base64",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ fileBase64: $json.fileBase64, fileName: $json.fileName, threshold: $json.threshold, limit: $json.limit }) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "e5f6a7b8-0001-4000-8000-000000000003",
+      "name": "Search Products API",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [-256, 48],
+      "typeVersion": 4.4
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract results from API response and split into individual items\nconst response = $input.first().json;\nconst results = response.results || [];\nconst clientName = $('Prepare RFP Data').first().json.client_name || 'Client';\nconst summary = response.summary || {};\n\nconst items = results.map(r => ({\n  json: {\n    rfp_line: r.rfp_line,\n    query: r.query,\n    description: r.description || '',\n    quantity: r.quantity,\n    location: r.location || '',\n    notes: r.notes || '',\n    matched: r.matched,\n    confidence: r.confidence,\n    matched_on: r.matchedOn || '',\n    product_name: r.product ? r.product.name : 'No match found',\n    brand: r.product ? r.product.brand : '',\n    product_description: r.product ? (r.product.description || '') : '',\n    dimensions: r.product ? (r.product.dimensions || '') : '',\n    materials: r.product ? (r.product.materials || '') : '',\n    designer: r.product ? (r.product.designer || '') : '',\n    category: r.product ? (r.product.category || '') : '',\n    weight: r.product ? (r.product.weight || '') : '',\n    pdf_url: r.product ? (r.product.pdf_url || '') : '',\n    image_url: r.product ? (r.product.image_url || '') : '',\n    source_url: r.product ? (r.product.source_url || '') : '',\n    variants_count: r.product ? (r.product.variants || []).length : 0,\n    alternatives: r.alternatives || [],\n    client_name: clientName,\n    total_items: summary.total || results.length,\n    total_matched: summary.matched || 0,\n    total_review: summary.needsReview || 0\n  }\n}));\n\nreturn items;"
+      },
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "Split & Format Results",
+      "type": "n8n-nodes-base.code",
+      "position": [-128, 48],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.matched }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b8bb7dae-7bfe-4e84-98a4-2ac91050c56c",
+      "name": "Confidence Gate",
+      "type": "n8n-nodes-base.if",
+      "position": [128, 48],
+      "typeVersion": 2.3
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-4o', temperature: 0.3, messages: [{ role: 'system', content: 'You are an RFP response assistant for a furniture company. Given a product match from our database, write a short professional slide description. Return ONLY valid JSON with no markdown formatting.' }, { role: 'user', content: 'RFP Requirement: ' + $json.query + '\\nQuantity needed: ' + $json.quantity + '\\nLocation: ' + ($json.location || 'N/A') + '\\nNotes: ' + ($json.notes || 'N/A') + '\\n\\nMatched Product: ' + $json.product_name + ' by ' + $json.brand + '\\nMatch Confidence: ' + ($json.confidence * 100).toFixed(1) + '%\\nDescription: ' + $json.product_description + '\\nDimensions: ' + $json.dimensions + '\\nMaterials: ' + $json.materials + '\\nDesigner: ' + $json.designer + '\\n\\nWrite:\\n1. A slide title (short, 5-8 words)\\n2. A 2-3 sentence product recommendation paragraph\\n3. Key specs as bullet points\\n\\nReturn as JSON: {\"slide_title\": \"...\", \"recommendation\": \"...\", \"specs\": [\"...\", \"...\"]}' }] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "7a30664c-a26d-4399-814f-1d96c84d50a5",
+      "name": "Generate Slide Content (GPT-4o)",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [384, -48],
+      "typeVersion": 4.4,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "OpenAI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all low-confidence or unmatched items into a review summary\nconst items = $input.all();\nconst clientName = items[0]?.json?.client_name || 'Client';\n\nconst lines = items.map(item => {\n  const d = item.json;\n  const confPct = d.confidence ? (d.confidence * 100).toFixed(0) + '%' : '0%';\n  let closest = '';\n  if (d.product_name && d.product_name !== 'No match found') {\n    closest = `\\n    Closest: ${d.product_name} (${d.brand}) \\u2014 ${confPct}`;\n    if (d.source_url) {\n      closest += `\\n    \\uD83D\\uDD17 <a href=\\\"${d.source_url}\\\">View Product</a>`;\n    }\n  }\n  return `\\u2022 Line ${d.rfp_line}: \\\"${d.query}\\\" (Qty: ${d.quantity})${closest}`;\n}).join('\\n\\n');\n\nconst message = `\\u26A0\\uFE0F <b>RFP Manual Review Required</b>\\n\\n<b>Client:</b> ${clientName}\\n<b>Items Below Threshold:</b> ${items.length}\\n\\nThe following items need manual review:\\n\\n${lines}\\n\\nPlease verify and select suitable products.\\n\\n\\u2014 Sent automatically from <b>superCXO</b>`;\n\nreturn [{\n  json: {\n    message: message,\n    count: items.length,\n    client_name: clientName\n  }\n}];"
+      },
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "Flag for Manual Review",
+      "type": "n8n-nodes-base.code",
+      "position": [384, 160],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/bot{{YOUR_BOT_TOKEN}}/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: 'YOUR_CHAT_ID', text: $json.message, parse_mode: 'HTML', disable_web_page_preview: true }) }}",
+        "options": {}
+      },
+      "id": "c5d6e7f8-0001-4000-8000-000000000001",
+      "name": "Send Telegram Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [640, 160],
+      "typeVersion": 4.4
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse OpenAI API response and extract slide content\nconst items = [];\nconst allPrev = $('Confidence Gate').all();\n\nfor (let i = 0; i < $input.all().length; i++) {\n  const response = $input.all()[i].json;\n  const content = response.choices?.[0]?.message?.content || '{}';\n  \n  // Clean markdown code fences if present\n  let cleaned = content.trim();\n  if (cleaned.startsWith('```')) {\n    cleaned = cleaned.replace(/^```(?:json)?\\n?/, '').replace(/\\n?```$/, '').trim();\n  }\n  \n  let parsed;\n  try {\n    parsed = JSON.parse(cleaned);\n  } catch (e) {\n    parsed = {\n      slide_title: 'Product Recommendation',\n      recommendation: cleaned,\n      specs: []\n    };\n  }\n  \n  // Carry forward the original product data (match by index)\n  const prev = (allPrev[i] || allPrev[0] || {}).json || {};\n  \n  items.push({\n    json: {\n      slide_title: parsed.slide_title || 'Product Recommendation',\n      recommendation: parsed.recommendation || '',\n      specs: parsed.specs || [],\n      product_name: prev.product_name || '',\n      brand: prev.brand || '',\n      image_url: prev.image_url || '',\n      confidence: prev.confidence || 0,\n      quantity: prev.quantity || '',\n      location: prev.location || '',\n      client_name: prev.client_name || 'Client'\n    }\n  });\n}\n\nreturn items;"
+      },
+      "id": "d1e2f3a4-0001-4000-8000-000000000002",
+      "name": "Parse GPT Response",
+      "type": "n8n-nodes-base.code",
+      "position": [640, -48],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect all parsed GPT slide items into a single array for PPTX generation\nconst items = $input.all();\nconst clientName = items[0]?.json?.client_name || 'Client';\n\nconst slides = items.map(item => ({\n  slide_title: item.json.slide_title || 'Product Recommendation',\n  recommendation: item.json.recommendation || '',\n  specs: item.json.specs || [],\n  product_name: item.json.product_name || '',\n  brand: item.json.brand || '',\n  image_url: item.json.image_url || '',\n  confidence: item.json.confidence || 0,\n  quantity: item.json.quantity || '',\n  location: item.json.location || ''\n}));\n\nreturn [{\n  json: {\n    clientName: clientName,\n    slides: slides\n  }\n}];"
+      },
+      "id": "40a81bfe-f031-4727-ac7f-7346feafcda0",
+      "name": "Collect Slides Data",
+      "type": "n8n-nodes-base.code",
+      "position": [896, -48],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/api/rfp/generate-pptx",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ clientName: $json.clientName, slides: $json.slides }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "32eb096b-014a-461f-99a9-591cbc167117",
+      "name": "Generate PowerPoint",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1152, -48],
+      "typeVersion": 4.4
+    },
+    {
+      "parameters": {
+        "name": "={{ $('Prepare RFP Data').first().json.client_name + ' - RFP Presentation.pptx' }}",
+        "folderId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {}
+      },
+      "id": "g1d2r3v4-0001-4000-8000-000000000001",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "position": [1408, -48],
+      "typeVersion": 3,
+      "credentials": {}
+    }
+  ],
+  "connections": {
+    "Weekly Sync Trigger": {
+      "main": [
+        [
+          {
+            "node": "Sync All Brands",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload RFP Form": {
+      "main": [
+        [
+          {
+            "node": "Prepare RFP Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare RFP Data": {
+      "main": [
+        [
+          {
+            "node": "Search Products API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Products API": {
+      "main": [
+        [
+          {
+            "node": "Split & Format Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split & Format Results": {
+      "main": [
+        [
+          {
+            "node": "Confidence Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confidence Gate": {
+      "main": [
+        [
+          {
+            "node": "Generate Slide Content (GPT-4o)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Flag for Manual Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Slide Content (GPT-4o)": {
+      "main": [
+        [
+          {
+            "node": "Parse GPT Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse GPT Response": {
+      "main": [
+        [
+          {
+            "node": "Collect Slides Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Slides Data": {
+      "main": [
+        [
+          {
+            "node": "Generate PowerPoint",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate PowerPoint": {
+      "main": [
+        [
+          {
+            "node": "Upload to Google Drive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Flag for Manual Review": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "e34946f79eb17f38e79515287ba7a74097ede0612917eaf78d9f406d7cbf649c"
+  }
+}

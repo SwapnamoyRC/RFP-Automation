@@ -1,0 +1,846 @@
+{
+  "name": "RFP Bot - Telegram First (Approve/Reject)",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message", "callback_query"],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [220, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nlet messageType = 'unknown';\n\nif (item.callback_query && item.callback_query.data) {\n  messageType = 'callback';\n} else if (item.message && item.message.document && item.message.document.file_id) {\n  messageType = 'document';\n} else if (item.message && item.message.text === '/start') {\n  messageType = 'start';\n} else if (item.message && item.message.text) {\n  messageType = 'text';\n}\n\nreturn [{ json: { ...item, messageType } }];"
+      },
+      "id": "classify-msg",
+      "name": "Classify Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "version": 2, "combinator": "and" },
+                "conditions": [
+                  {
+                    "id": "cb-check",
+                    "leftValue": "={{ $json.messageType }}",
+                    "rightValue": "callback",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": "Callback Query"
+            },
+            {
+              "conditions": {
+                "options": { "version": 2, "combinator": "and" },
+                "conditions": [
+                  {
+                    "id": "doc-check",
+                    "leftValue": "={{ $json.messageType }}",
+                    "rightValue": "document",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": "Document Upload"
+            },
+            {
+              "conditions": {
+                "options": { "version": 2, "combinator": "and" },
+                "conditions": [
+                  {
+                    "id": "start-check",
+                    "leftValue": "={{ $json.messageType }}",
+                    "rightValue": "start",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": "Start Command"
+            },
+            {
+              "conditions": {
+                "options": { "version": 2, "combinator": "and" },
+                "conditions": [
+                  {
+                    "id": "text-check",
+                    "leftValue": "={{ $json.messageType }}",
+                    "rightValue": "text",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": "Text Message"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "router",
+      "name": "Route Message Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/api/sessions",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "chatId", "value": "={{ $json.message.chat.id }}" },
+            { "name": "userId", "value": "={{ $json.message.from.id }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-session",
+      "name": "Create Session",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 120]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "Welcome to the RFP Automation Bot!\n\nHere's how it works:\n1. Upload your RFP Excel file (.xlsx)\n2. I'll ask for the client name\n3. Set a confidence threshold (or use default 55%)\n4. I'll process the RFP and show each matched product\n5. You approve or reject each recommendation\n6. I'll generate the PowerPoint with only approved items\n\nSend me an RFP Excel file to get started!",
+        "additionalFields": {}
+      },
+      "id": "welcome-msg",
+      "name": "Send Welcome",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [940, 120],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://host.docker.internal:3000/api/sessions/active/{{ $json.message.chat.id }}",
+        "options": {}
+      },
+      "id": "check-session-doc",
+      "name": "Check Session (Doc)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/bot{{ $credentials.telegramApi.accessToken }}/getFile?file_id={{ $('Telegram Trigger').item.json.message.document.file_id }}",
+        "options": {}
+      },
+      "id": "get-file-path",
+      "name": "Get File Path",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/file/bot{{ $credentials.telegramApi.accessToken }}/{{ $json.result.file_path }}",
+        "options": {
+          "response": { "response": { "responseFormat": "file" } }
+        }
+      },
+      "id": "download-file",
+      "name": "Download File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1160, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/api/sessions",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "chatId", "value": "={{ $('Telegram Trigger').item.json.message.chat.id }}" },
+            { "name": "userId", "value": "={{ $('Telegram Trigger').item.json.message.from.id }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-session-for-doc",
+      "name": "Create Session for Doc",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1380, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convert downloaded file binary to base64\nconst binaryData = $('Download File').first().binary;\nconst sessionData = $('Create Session for Doc').first().json;\nconst triggerData = $('Telegram Trigger').first().json;\n\nlet fileBase64 = '';\nif (binaryData && binaryData.data) {\n  const buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n  fileBase64 = buffer.toString('base64');\n}\n\nconst fileName = triggerData.message?.document?.file_name || 'upload.xlsx';\n\nreturn [{\n  json: {\n    sessionId: sessionData.id,\n    chatId: triggerData.message.chat.id,\n    fileBase64,\n    fileName\n  }\n}];"
+      },
+      "id": "prepare-file",
+      "name": "Prepare File Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1600, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=File received: {{ $json.fileName }}\n\nPlease enter the client name:",
+        "additionalFields": {}
+      },
+      "id": "ask-client-name",
+      "name": "Ask Client Name",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1820, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=http://host.docker.internal:3000/api/sessions/{{ $json.sessionId }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'awaiting_client_name', file_name: $json.fileName, file_base64: $json.fileBase64 }) }}",
+        "options": {}
+      },
+      "id": "update-session-awaiting",
+      "name": "Update Session Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2040, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://host.docker.internal:3000/api/sessions/active/{{ $json.message.chat.id }}",
+        "options": {}
+      },
+      "id": "check-session-text",
+      "name": "Check Session (Text)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 500]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "version": 2, "combinator": "and" },
+                "conditions": [
+                  {
+                    "id": "await-client",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "awaiting_client_name",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": "Set Client Name"
+            },
+            {
+              "conditions": {
+                "options": { "version": 2, "combinator": "and" },
+                "conditions": [
+                  {
+                    "id": "await-threshold",
+                    "leftValue": "={{ $json.status }}",
+                    "rightValue": "awaiting_threshold",
+                    "operator": { "type": "string", "operation": "equals" }
+                  }
+                ]
+              },
+              "renameOutput": "Set Threshold"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra" }
+      },
+      "id": "route-text-state",
+      "name": "Route by Session State",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [940, 500]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=http://host.docker.internal:3000/api/sessions/{{ $('Check Session (Text)').item.json.id }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "client_name", "value": "={{ $('Telegram Trigger').item.json.message.text }}" },
+            { "name": "status", "value": "awaiting_threshold" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "save-client-name",
+      "name": "Save Client Name",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1180, 420]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "=Client: {{ $('Telegram Trigger').item.json.message.text }}\n\nSet confidence threshold (0.1 to 1.0).\nOr send /skip to use default (0.55).\n\nHigher = stricter matching, fewer results\nLower = more results, some may be less accurate",
+        "additionalFields": {}
+      },
+      "id": "ask-threshold",
+      "name": "Ask Threshold",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1400, 420],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const session = $('Check Session (Text)').first().json;\nconst text = $('Telegram Trigger').first().json.message.text;\nconst chatId = $('Telegram Trigger').first().json.message.chat.id;\n\nlet threshold = 0.55;\nif (text !== '/skip') {\n  const parsed = parseFloat(text);\n  if (!isNaN(parsed) && parsed >= 0.1 && parsed <= 1.0) {\n    threshold = parsed;\n  }\n}\n\nreturn [{\n  json: {\n    sessionId: session.id,\n    chatId,\n    threshold,\n    fileName: session.file_name\n  }\n}];"
+      },
+      "id": "parse-threshold",
+      "name": "Parse Threshold",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1180, 580]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=http://host.docker.internal:3000/api/sessions/{{ $json.sessionId }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "threshold", "value": "={{ $json.threshold }}" },
+            { "name": "status", "value": "processing" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "save-threshold",
+      "name": "Save Threshold",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1400, 580]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Threshold').item.json.chatId }}",
+        "text": "=Processing RFP with threshold {{ $('Parse Threshold').item.json.threshold }}...\n\nThis may take a few minutes. I'll extract images, analyze them with AI, and find matching products.\n\nPlease wait...",
+        "additionalFields": {}
+      },
+      "id": "processing-msg",
+      "name": "Send Processing Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1620, 580],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:3000/api/sessions/{{ $('Parse Threshold').item.json.sessionId }}/process",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "fileName", "value": "={{ $('Parse Threshold').item.json.fileName }}" }
+          ]
+        },
+        "options": { "timeout": 600000 }
+      },
+      "id": "process-rfp",
+      "name": "Process RFP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1840, 580]
+    },
+    {
+      "parameters": {
+        "jsCode": "const processResult = $('Process RFP').first().json;\nconst chatId = $('Parse Threshold').first().json.chatId;\nconst sessionId = $('Parse Threshold').first().json.sessionId;\n\nconst items = processResult.items || [];\n\nreturn items.map(item => ({\n  json: {\n    ...item,\n    chatId,\n    sessionId,\n    totalItems: items.length\n  }\n}));"
+      },
+      "id": "split-items",
+      "name": "Split Items for Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2060, 580]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Threshold').item.json.chatId }}",
+        "text": "=Processing complete!\n\nFound {{ $json.total_items }} items ({{ $json.matched }} matched, {{ $json.needs_review }} need review).\n\nNow sending each match for your review...",
+        "additionalFields": {}
+      },
+      "id": "summary-msg",
+      "name": "Send Summary",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2060, 480],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chatId }}",
+        "text": "=Item {{ $json.item_id + 1 }}/{{ $json.totalItems }}\n\nRFP Request: {{ $json.query }}\nLocation: {{ $json.location || 'N/A' }}\nQty: {{ $json.quantity || 'N/A' }}\n\nRecommended: {{ $json.product_name || 'No match' }}\nBrand: {{ $json.product_brand || 'N/A' }}\nConfidence: {{ $json.confidence ? ($json.confidence * 100).toFixed(1) + '%' : '0%' }}\nMatch Source: {{ $json.match_source || 'none' }}\n{{ $json.product_image_url ? '\\nProduct Image: ' + $json.product_image_url : '' }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "replyMarkup": "inlineKeyboard",
+          "inlineKeyboard": {
+            "rows": [
+              {
+                "row": {
+                  "buttons": [
+                    {
+                      "text": "Approve",
+                      "additionalFields": {
+                        "callbackData": "=approve_{{ $json.sessionId }}_{{ $json.item_id }}"
+                      }
+                    },
+                    {
+                      "text": "Reject",
+                      "additionalFields": {
+                        "callbackData": "=reject_{{ $json.sessionId }}_{{ $json.item_id }}"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "id": "send-review-item",
+      "name": "Send Item for Review",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2280, 640],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle callback query (approve/reject button press)\nconst cb = $('Telegram Trigger').first().json.callback_query;\nconst data = cb.data; // e.g. \"approve_5_3\" or \"reject_5_3\"\nconst chatId = cb.message.chat.id;\nconst messageId = cb.message.message_id;\n\nconst parts = data.split('_');\nconst action = parts[0]; // approve or reject\nconst sessionId = parts[1];\nconst itemIndex = parts[2];\n\nreturn [{\n  json: {\n    action,\n    sessionId,\n    itemIndex: parseInt(itemIndex),\n    chatId,\n    messageId,\n    callbackQueryId: cb.id\n  }\n}];"
+      },
+      "id": "parse-callback",
+      "name": "Parse Callback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 80]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://host.docker.internal:3000/api/sessions/{{ $json.sessionId }}/items",
+        "options": {}
+      },
+      "id": "get-items-for-id",
+      "name": "Get Session Items",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [940, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const callback = $('Parse Callback').first().json;\nconst items = $('Get Session Items').first().json;\n\n// Find the actual DB item ID from item_index\nconst allItems = Array.isArray(items) ? items : [];\nconst targetItem = allItems.find(i => i.item_index === callback.itemIndex);\n\nif (!targetItem) {\n  return [{ json: { ...callback, dbItemId: null, error: 'Item not found' } }];\n}\n\nreturn [{ json: { ...callback, dbItemId: targetItem.id } }];"
+      },
+      "id": "find-item-id",
+      "name": "Find DB Item ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1160, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:3000/api/sessions/{{ $json.sessionId }}/items/{{ $json.dbItemId }}/review",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "status", "value": "={{ $json.action === 'approve' ? 'approved' : 'rejected' }}" },
+            { "name": "telegram_message_id", "value": "={{ $json.messageId }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "submit-review",
+      "name": "Submit Review",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1380, 80]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/bot{{ $credentials.telegramApi.accessToken }}/answerCallbackQuery",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "callback_query_id", "value": "={{ $('Parse Callback').item.json.callbackQueryId }}" },
+            { "name": "text", "value": "={{ $('Parse Callback').item.json.action === 'approve' ? 'Approved!' : 'Rejected!' }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "answer-callback",
+      "name": "Answer Callback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1600, 80],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.telegram.org/bot{{ $credentials.telegramApi.accessToken }}/editMessageText",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "chat_id", "value": "={{ $('Parse Callback').item.json.chatId }}" },
+            { "name": "message_id", "value": "={{ $('Parse Callback').item.json.messageId }}" },
+            { "name": "text", "value": "={{ $('Parse Callback').item.json.action === 'approve' ? 'APPROVED' : 'REJECTED' }} {{ $('Parse Callback').item.json.action === 'approve' ? '\\u2705' : '\\u274c' }}\n\n{{ $('Answer Callback').item.json ? '' : '' }}{{ $('Parse Callback').item.json.action === 'approve' ? 'This item will be included in the PPT.' : 'This item will be skipped.' }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-msg",
+      "name": "Update Message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1820, 80],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "combinator": "and" },
+          "conditions": [
+            {
+              "id": "all-reviewed",
+              "leftValue": "={{ $('Submit Review').item.json.all_reviewed }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-all-reviewed",
+      "name": "All Items Reviewed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2040, 80]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Callback').item.json.chatId }}",
+        "text": "=All items reviewed!\n\nApproved: {{ $('Submit Review').item.json.approved }}\nRejected: {{ $('Submit Review').item.json.rejected }}\n\nGenerating PowerPoint with approved items...",
+        "additionalFields": {}
+      },
+      "id": "all-done-msg",
+      "name": "All Reviewed Message",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2280, 20],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=http://host.docker.internal:3000/api/sessions/{{ $('Parse Callback').item.json.sessionId }}",
+        "options": {}
+      },
+      "id": "get-session-for-gen",
+      "name": "Get Session Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2500, 20]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:3000/api/sessions/{{ $('Parse Callback').item.json.sessionId }}/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "clientName", "value": "={{ $json.client_name || 'Client' }}" }
+          ]
+        },
+        "options": {
+          "response": { "response": { "responseFormat": "file" } },
+          "timeout": 120000
+        }
+      },
+      "id": "generate-ppt",
+      "name": "Generate PPT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2720, 20]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "name": "=RFP_Response_{{ $('Get Session Details').item.json.client_name || 'Client' }}_{{ new Date().toISOString().split('T')[0] }}.pptx",
+        "folderId": "root",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "upload-drive",
+      "name": "Upload to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [2940, 20],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "GOOGLE_DRIVE_CREDENTIAL_ID",
+          "name": "Google Drive"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Parse Callback').item.json.chatId }}",
+        "text": "=PowerPoint generated and uploaded!\n\nFile: {{ $json.name }}\nGoogle Drive Link: https://drive.google.com/file/d/{{ $json.id }}/view\n\nSession complete!",
+        "additionalFields": {}
+      },
+      "id": "send-drive-link",
+      "name": "Send Drive Link",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [3160, 20],
+      "credentials": {
+        "telegramApi": {
+          "id": "TELEGRAM_CREDENTIAL_ID",
+          "name": "RFP Alert Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [{ "node": "Classify Message", "type": "main", "index": 0 }]
+      ]
+    },
+    "Classify Message": {
+      "main": [
+        [{ "node": "Route Message Type", "type": "main", "index": 0 }]
+      ]
+    },
+    "Route Message Type": {
+      "main": [
+        [{ "node": "Parse Callback", "type": "main", "index": 0 }],
+        [{ "node": "Check Session (Doc)", "type": "main", "index": 0 }],
+        [{ "node": "Create Session", "type": "main", "index": 0 }],
+        [{ "node": "Check Session (Text)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Session": {
+      "main": [
+        [{ "node": "Send Welcome", "type": "main", "index": 0 }]
+      ]
+    },
+    "Check Session (Doc)": {
+      "main": [
+        [{ "node": "Get File Path", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get File Path": {
+      "main": [
+        [{ "node": "Download File", "type": "main", "index": 0 }]
+      ]
+    },
+    "Download File": {
+      "main": [
+        [{ "node": "Create Session for Doc", "type": "main", "index": 0 }]
+      ]
+    },
+    "Create Session for Doc": {
+      "main": [
+        [{ "node": "Prepare File Data", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare File Data": {
+      "main": [
+        [
+          { "node": "Ask Client Name", "type": "main", "index": 0 },
+          { "node": "Update Session Status", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Check Session (Text)": {
+      "main": [
+        [{ "node": "Route by Session State", "type": "main", "index": 0 }]
+      ]
+    },
+    "Route by Session State": {
+      "main": [
+        [{ "node": "Save Client Name", "type": "main", "index": 0 }],
+        [{ "node": "Parse Threshold", "type": "main", "index": 0 }]
+      ]
+    },
+    "Save Client Name": {
+      "main": [
+        [{ "node": "Ask Threshold", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Threshold": {
+      "main": [
+        [
+          { "node": "Save Threshold", "type": "main", "index": 0 },
+          { "node": "Send Processing Message", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Send Processing Message": {
+      "main": [
+        [{ "node": "Process RFP", "type": "main", "index": 0 }]
+      ]
+    },
+    "Process RFP": {
+      "main": [
+        [{ "node": "Send Summary", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Summary": {
+      "main": [
+        [{ "node": "Split Items for Review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Split Items for Review": {
+      "main": [
+        [{ "node": "Send Item for Review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Callback": {
+      "main": [
+        [{ "node": "Get Session Items", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Session Items": {
+      "main": [
+        [{ "node": "Find DB Item ID", "type": "main", "index": 0 }]
+      ]
+    },
+    "Find DB Item ID": {
+      "main": [
+        [{ "node": "Submit Review", "type": "main", "index": 0 }]
+      ]
+    },
+    "Submit Review": {
+      "main": [
+        [
+          { "node": "Answer Callback", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Answer Callback": {
+      "main": [
+        [{ "node": "Update Message", "type": "main", "index": 0 }]
+      ]
+    },
+    "Update Message": {
+      "main": [
+        [{ "node": "All Items Reviewed?", "type": "main", "index": 0 }]
+      ]
+    },
+    "All Items Reviewed?": {
+      "main": [
+        [{ "node": "All Reviewed Message", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "All Reviewed Message": {
+      "main": [
+        [{ "node": "Get Session Details", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Session Details": {
+      "main": [
+        [{ "node": "Generate PPT", "type": "main", "index": 0 }]
+      ]
+    },
+    "Generate PPT": {
+      "main": [
+        [{ "node": "Upload to Google Drive", "type": "main", "index": 0 }]
+      ]
+    },
+    "Upload to Google Drive": {
+      "main": [
+        [{ "node": "Send Drive Link", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    { "name": "RFP Bot", "id": "rfp-bot-tag" }
+  ]
+}

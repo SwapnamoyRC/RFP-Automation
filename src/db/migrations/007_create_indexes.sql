@@ -1,0 +1,9 @@
+CREATE INDEX IF NOT EXISTS idx_products_brand ON products(brand_id);
+CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+CREATE INDEX IF NOT EXISTS idx_products_slug ON products(slug);
+CREATE INDEX IF NOT EXISTS idx_products_last_scraped ON products(last_scraped_at);
+CREATE INDEX IF NOT EXISTS idx_variants_product ON product_variants(product_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_product ON product_embeddings(product_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_type ON product_embeddings(embedding_type);
+CREATE INDEX IF NOT EXISTS idx_scrape_logs_brand ON scrape_logs(brand_id);
+CREATE INDEX IF NOT EXISTS idx_scrape_logs_status ON scrape_logs(status);

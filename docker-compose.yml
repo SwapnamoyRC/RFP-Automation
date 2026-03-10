@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rfp_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rfp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rfp_secret_2024}
+      POSTGRES_DB: ${POSTGRES_DB:-rfp_automation}
+    ports:
+      - "${POSTGRES_PORT:-5555}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rfp_user} -d ${POSTGRES_DB:-rfp_automation}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    driver: local

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:www.naughtone.com)",
+      "Bash(npx playwright install chromium)",
+      "Bash(node -e \":*)"
+    ]
+  }
+}
