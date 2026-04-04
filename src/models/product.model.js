@@ -52,7 +52,7 @@ class ProductModel {
     return rows;
   }
 
-  static async findAll({ brand, category, page = 1, limit = 20 }) {
+  static async findAll({ brand, category, search, page = 1, limit = 20 }) {
     const conditions = [];
     const params = [];
     let paramIndex = 1;
@@ -64,6 +64,11 @@ class ProductModel {
     if (category) {
       conditions.push(`p.category = $${paramIndex++}`);
       params.push(category);
+    }
+    if (search) {
+      conditions.push(`(p.name ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex} OR b.name ILIKE $${paramIndex})`);
+      params.push(`%${search}%`);
+      paramIndex++;
     }
 
     const where = conditions.length > 0

@@ -2,6 +2,8 @@ const { pool } = require('../config/database');
 const { toSql } = require('pgvector/pg');
 
 class EmbeddingModel {
+  // ---- Legacy product_embeddings (old products table) ----
+
   static async upsert(productId, embeddingType, embedding, inputText) {
     await pool.query(
       `INSERT INTO product_embeddings (product_id, embedding_type, embedding, input_text)
@@ -49,6 +51,63 @@ class EmbeddingModel {
       JOIN brands b ON b.id = p.brand_id
       WHERE ${conditions.join(' AND ')}
       ORDER BY pe.embedding <=> $1 ASC
+      LIMIT $${paramIndex}`,
+      params
+    );
+    return rows;
+  }
+
+  // ---- New product_family_embeddings ----
+
+  static async upsertFamily(familyId, embeddingType, embedding, inputText) {
+    await pool.query(
+      `INSERT INTO product_family_embeddings (family_id, embedding_type, embedding, input_text)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (family_id, embedding_type) DO UPDATE SET
+         embedding = $3, input_text = $4, created_at = NOW()`,
+      [familyId, embeddingType, toSql(embedding), inputText]
+    );
+  }
+
+  static async findByFamilyId(familyId) {
+    const { rows } = await pool.query(
+      'SELECT id, family_id, embedding_type, input_text, model, created_at FROM product_family_embeddings WHERE family_id = $1',
+      [familyId]
+    );
+    return rows;
+  }
+
+  /**
+   * Search product families by vector similarity.
+   */
+  static async searchFamilies(queryEmbedding, { embeddingType = 'family_description', brand, category, limit = 10 }) {
+    const conditions = ['pfe.embedding_type = $2'];
+    const params = [toSql(queryEmbedding), embeddingType];
+    let paramIndex = 3;
+
+    if (brand) {
+      conditions.push(`b.slug = $${paramIndex++}`);
+      params.push(brand);
+    }
+    if (category) {
+      conditions.push(`pf.category = $${paramIndex++}`);
+      params.push(category);
+    }
+
+    params.push(limit);
+
+    const { rows } = await pool.query(
+      `SELECT
+        pf.id, pf.name, pf.slug, pf.description, pf.category,
+        pf.source_url, pf.thumbnail_url, pf.metadata,
+        b.name AS brand_name, b.slug AS brand_slug,
+        pfe.embedding_type,
+        1 - (pfe.embedding <=> $1) AS similarity
+      FROM product_family_embeddings pfe
+      JOIN product_families pf ON pf.id = pfe.family_id
+      JOIN brands b ON b.id = pf.brand_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY pfe.embedding <=> $1 ASC
       LIMIT $${paramIndex}`,
       params
     );

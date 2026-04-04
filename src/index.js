@@ -27,10 +27,13 @@ async function main() {
     syncService.startCronSchedule();
 
     // Start server
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       logger.info(`RFP Automation API running on port ${PORT}`);
       logger.info(`Health check: http://localhost:${PORT}/api/health`);
     });
+    // RFP processing with full AI pipeline can take 10+ minutes
+    server.timeout = 900000; // 15 min
+    server.keepAliveTimeout = 900000;
   } catch (err) {
     logger.error('Failed to start server:', err);
     process.exit(1);

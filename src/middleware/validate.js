@@ -1,15 +1,54 @@
+const { ZodError } = require('zod');
+
 function validate(schema) {
   return (req, res, next) => {
-    const { error, value } = schema.validate(req.body, { abortEarly: false });
-    if (error) {
-      return res.status(400).json({
-        error: 'Validation error',
-        details: error.details.map(d => d.message)
-      });
+    try {
+      req.body = schema.parse(req.body);
+      next();
+    } catch (err) {
+      if (err instanceof ZodError) {
+        return res.status(400).json({
+          error: 'Validation error',
+          details: err.errors.map(e => e.message)
+        });
+      }
+      next(err);
     }
-    req.body = value;
-    next();
   };
 }
 
-module.exports = validate;
+function validateQuery(schema) {
+  return (req, res, next) => {
+    try {
+      req.query = schema.parse(req.query);
+      next();
+    } catch (err) {
+      if (err instanceof ZodError) {
+        return res.status(400).json({
+          error: 'Validation error',
+          details: err.errors.map(e => e.message)
+        });
+      }
+      next(err);
+    }
+  };
+}
+
+function validateParams(schema) {
+  return (req, res, next) => {
+    try {
+      req.params = schema.parse(req.params);
+      next();
+    } catch (err) {
+      if (err instanceof ZodError) {
+        return res.status(400).json({
+          error: 'Validation error',
+          details: err.errors.map(e => e.message)
+        });
+      }
+      next(err);
+    }
+  };
+}
+
+module.exports = { validate, validateQuery, validateParams };

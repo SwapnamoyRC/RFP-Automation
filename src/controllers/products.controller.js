@@ -2,10 +2,11 @@ const productService = require('../services/product.service');
 const pdfService = require('../services/pdf.service');
 
 async function getProducts(req, res) {
-  const { brand, category, page = 1, limit = 20 } = req.query;
+  const { brand, category, search, page = 1, limit = 20 } = req.query;
   const result = await productService.getProducts({
     brand,
     category,
+    search,
     page: parseInt(page),
     limit: parseInt(limit)
   });

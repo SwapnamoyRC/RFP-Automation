@@ -2,8 +2,14 @@ const { Router } = require('express');
 const asyncWrap = require('../middleware/async-wrap');
 const { getProducts, getProductById, getProductPdf } = require('../controllers/products.controller');
 const embeddingService = require('../services/embedding.service');
+const BrandModel = require('../models/brand.model');
 
 const router = Router();
+
+router.get('/brands', asyncWrap(async (req, res) => {
+  const brands = await BrandModel.findAll();
+  res.json({ brands });
+}));
 
 router.get('/', asyncWrap(getProducts));
 router.get('/:id', asyncWrap(getProductById));

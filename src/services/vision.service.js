@@ -2,19 +2,7 @@ const ExcelJS = require('exceljs');
 const openaiConfig = require('../config/openai');
 const logger = require('../config/logger');
 
-// Claude Vision (preferred) with GPT-4o fallback
-let anthropic = null;
-try {
-  if (process.env.ANTHROPIC_API_KEY) {
-    const Anthropic = require('@anthropic-ai/sdk');
-    anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    logger.info('[vision] Using Claude Sonnet 4.6 for image description');
-  } else {
-    logger.info('[vision] No ANTHROPIC_API_KEY found, falling back to GPT-4o');
-  }
-} catch (err) {
-  logger.warn(`[vision] Failed to load Anthropic SDK: ${err.message}, falling back to GPT-4o`);
-}
+logger.info('[vision] Using GPT-4o for image description');
 
 class VisionService {
   /**
@@ -40,9 +28,11 @@ class VisionService {
         if (!row) continue;
         const cells = row.map(c => String(c || '').toLowerCase().trim());
         // Look for header row with known columns
-        const hasHeader = cells.includes('s no') || cells.includes('sr.no') || cells.includes('description') || cells.includes('qty');
-        const imageAliases = ['image', 'images', 'photo', 'picture', 'pic', 'img'];
-        const hasImageCol = cells.some(c => imageAliases.includes(c));
+        const hasHeader = cells.includes('s no') || cells.includes('sr.no') || cells.includes('sl.no')
+          || cells.includes('nos') || cells.includes('description') || cells.includes('item description')
+          || cells.includes('item') || cells.includes('qty');
+        const imageAliases = ['image', 'images', 'photo', 'picture', 'pic', 'img', 'ref image', 'deck image', 'proposed image'];
+        const hasImageCol = cells.some(c => imageAliases.some(a => c.includes(a)));
         if (hasHeader && hasImageCol) {
           headerRow = i;
           // Find the FIRST image column
@@ -103,7 +93,8 @@ class VisionService {
         }
 
         // Skip images outside the data range (logos, signatures, stamps)
-        if (headerRow >= 0 && (row < dataStartRow || row >= dataEndRow)) {
+        // Allow a small buffer past dataEndRow for images anchored on/near the totals row
+        if (headerRow >= 0 && (row < dataStartRow || row > dataEndRow + 2)) {
           logger.info(`[image-extract] Skipping non-data image at row ${row} col ${col} (outside rows ${dataStartRow}-${dataEndRow - 1})`);
           continue;
         }
@@ -170,37 +161,12 @@ class VisionService {
   }
 
   /**
-   * Send a single image to Claude Sonnet 4.6 (preferred) or GPT-4o (fallback)
-   * and get a text description for furniture product matching.
+   * Send a single image to GPT-4o and get a text description for furniture product matching.
    */
   async describeImage(base64, extension = 'png') {
     const mimeType = extension === 'jpg' ? 'jpeg' : extension;
     const prompt = 'You are identifying a furniture product from an RFP document image for database matching. Be extremely precise about the product type. CRITICAL distinctions:\n- Side table vs coffee table vs dining table (check height and size)\n- Chair vs stool vs armchair vs lounge chair (check arms, height, cushioning)\n- Sofa vs settee vs bench (check arms, back, seat count)\n\nDescribe: 1) EXACT product type (side table, coffee table, dining table, desk, armchair, dining chair, bar stool, lounge chair, sofa, 2-seater sofa, 3-seater sofa, pendant lamp, floor lamp, pouf, shelf, bench, etc.), 2) distinctive shape/silhouette (round top, mushroom shape, tapered legs, cantilever, organic form, angular, etc.), 3) base/leg type (pedestal base, tube base, sled base, wood legs, metal legs, etc.), 4) materials and colors visible, 5) any brand name or product name text visible in the image. Be very specific about shape and form in 2-3 sentences.';
 
-    // Use Claude Sonnet 4.6 if available (better furniture identification)
-    if (anthropic) {
-      const response = await anthropic.messages.create({
-        model: 'claude-sonnet-4-6-20250514',
-        max_tokens: 400,
-        messages: [{
-          role: 'user',
-          content: [
-            {
-              type: 'image',
-              source: {
-                type: 'base64',
-                media_type: `image/${mimeType}`,
-                data: base64
-              }
-            },
-            { type: 'text', text: prompt }
-          ]
-        }]
-      });
-      return response.content[0].text;
-    }
-
-    // Fallback to GPT-4o
     const dataUri = `data:image/${mimeType};base64,${base64}`;
     const response = await openaiConfig.openai.chat.completions.create({
       model: 'gpt-4o',
@@ -265,7 +231,7 @@ class VisionService {
     if (!imageUrl) return null;
 
     const fetch = (await import('node-fetch')).default;
-    const response = await fetch(imageUrl, { timeout: 15000 });
+    const response = await fetch(imageUrl, { timeout: 60000 });
     if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
 
     const buffer = Buffer.from(await response.arrayBuffer());

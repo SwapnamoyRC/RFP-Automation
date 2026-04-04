@@ -1,14 +1,13 @@
--- RFP Sessions: tracks each Telegram-initiated RFP processing session
+-- RFP Sessions: tracks each RFP processing session per user
 CREATE TABLE IF NOT EXISTS rfp_sessions (
   id SERIAL PRIMARY KEY,
-  telegram_chat_id BIGINT NOT NULL,
-  telegram_user_id BIGINT,
+  user_id UUID REFERENCES users(id),
   client_name VARCHAR(255),
   threshold FLOAT DEFAULT 0.55,
   file_name VARCHAR(255),
   file_base64 TEXT,
   status VARCHAR(50) DEFAULT 'awaiting_file',
-  -- Status flow: awaiting_file → awaiting_client_name → awaiting_threshold → processing → reviewing → generating → completed
+  -- Status flow: awaiting_file → processing → reviewing → generating → completed
   total_items INT DEFAULT 0,
   approved_count INT DEFAULT 0,
   rejected_count INT DEFAULT 0,
@@ -41,7 +40,7 @@ CREATE TABLE IF NOT EXISTS rfp_session_items (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_rfp_sessions_chat_id ON rfp_sessions(telegram_chat_id);
+CREATE INDEX IF NOT EXISTS idx_rfp_sessions_user_id ON rfp_sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_rfp_sessions_status ON rfp_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_rfp_session_items_session ON rfp_session_items(session_id);
 CREATE INDEX IF NOT EXISTS idx_rfp_session_items_review ON rfp_session_items(session_id, review_status);

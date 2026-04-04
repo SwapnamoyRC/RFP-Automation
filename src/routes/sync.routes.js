@@ -1,15 +1,15 @@
 const { Router } = require('express');
-const Joi = require('joi');
+const { z } = require('zod');
 const asyncWrap = require('../middleware/async-wrap');
-const validate = require('../middleware/validate');
+const { validate } = require('../middleware/validate');
 const { startSync, getSyncStatus } = require('../controllers/sync.controller');
 
 const router = Router();
 
-const syncSchema = Joi.object({
-  brands: Joi.array().items(Joi.string().valid('hay', 'muuto', 'naughtone')).optional(),
-  forceRefresh: Joi.boolean().default(false),
-  triggeredBy: Joi.string().optional()
+const syncSchema = z.object({
+  brands: z.array(z.enum(['hay', 'muuto', 'naughtone'])).optional(),
+  forceRefresh: z.boolean().default(false),
+  triggeredBy: z.string().optional(),
 });
 
 router.post('/', validate(syncSchema), asyncWrap(startSync));

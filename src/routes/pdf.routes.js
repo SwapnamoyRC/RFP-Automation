@@ -1,14 +1,14 @@
 const { Router } = require('express');
-const Joi = require('joi');
+const { z } = require('zod');
 const asyncWrap = require('../middleware/async-wrap');
-const validate = require('../middleware/validate');
+const { validate } = require('../middleware/validate');
 const pdfService = require('../services/pdf.service');
 
 const router = Router();
 
-const extractPdfSchema = Joi.object({
-  url: Joi.string().uri().required(),
-  productId: Joi.string().uuid().optional()
+const extractPdfSchema = z.object({
+  url: z.string().url('A valid URL is required'),
+  productId: z.string().uuid().optional(),
 });
 
 router.post('/', validate(extractPdfSchema), asyncWrap(async (req, res) => {
