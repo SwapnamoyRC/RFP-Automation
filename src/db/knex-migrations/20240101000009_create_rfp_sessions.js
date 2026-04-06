@@ -22,11 +22,6 @@ exports.up = async function (knex) {
   `);
 
 
-  rfp_line,
-  alternatives,
-  matched_points
-mismatched_points,
-isOverridden
   await knex.raw(`
     CREATE TABLE IF NOT EXISTS rfp_session_items (
       id SERIAL PRIMARY KEY,
