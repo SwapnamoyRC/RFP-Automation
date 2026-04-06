@@ -1,5 +1,4 @@
 const winston = require('winston');
-console.log("gelo");
 const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
