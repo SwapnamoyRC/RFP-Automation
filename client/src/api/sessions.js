@@ -1,7 +1,13 @@
 import axios from 'axios';
 
+// const api = axios.create({
+//   baseURL: import.meta.env.VITE_BACKEND_URL,
+//   timeout: 900000, // 15 min for processing (SigLIP + GPT reranking + verification per item)
+// });
+
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_BACKEND_URL,
+  baseURL: `/api`,
   timeout: 900000, // 15 min for processing (SigLIP + GPT reranking + verification per item)
 });
 

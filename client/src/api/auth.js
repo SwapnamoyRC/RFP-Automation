@@ -1,7 +1,12 @@
 import axios from 'axios';
 
+// const api = axios.create({
+//   baseURL: `${import.meta.env.VITE_BACKEND_URL}/auth`,
+//   timeout: 10000,
+// });
+
 const api = axios.create({
-  baseURL: `${import.meta.env.VITE_BACKEND_URL}/auth`,
+  baseURL: `/api/auth`,
   timeout: 10000,
 });
 
