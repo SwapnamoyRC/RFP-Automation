@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_BACKEND_URL,
   timeout: 900000, // 15 min for processing (SigLIP + GPT reranking + verification per item)
 });
 
