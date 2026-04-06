@@ -2,11 +2,9 @@ exports.up = async function (knex) {
   await knex.raw(`
     CREATE TABLE IF NOT EXISTS rfp_sessions (
       id SERIAL PRIMARY KEY,
-      user_id UUID REFERENCES users(id),
       client_name VARCHAR(255),
       threshold FLOAT DEFAULT 0.55,
       file_name VARCHAR(255),
-      file_base64 TEXT,
       status VARCHAR(50) DEFAULT 'awaiting_file',
       total_items INT DEFAULT 0,
       approved_count INT DEFAULT 0,
@@ -14,7 +12,13 @@ exports.up = async function (knex) {
       pptx_drive_url TEXT,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
-    )
+      file_base64 TEXT,
+      user_id UUID REFERENCES users(id),
+      started_at TIMESTAMP DEFAULT NOW(),
+      completed_at TIMESTAMP DEFAULT NOW(),
+      processing_time_ms BIGINT,
+      image_weight DOUBLE PRECISION
+    ) 
   `);
 
   await knex.raw(`
