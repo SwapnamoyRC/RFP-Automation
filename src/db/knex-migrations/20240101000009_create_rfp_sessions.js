@@ -11,22 +11,28 @@ exports.up = async function (knex) {
       rejected_count INT DEFAULT 0,
       pptx_drive_url TEXT,
       created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
+      updated_at TIMESTAMP DEFAULT NOW(),
       file_base64 TEXT,
-      user_id UUID REFERENCES users(id),
-      started_at TIMESTAMP DEFAULT NOW(),
-      completed_at TIMESTAMP DEFAULT NOW(),
+      user_id UUID REFERENCES users(id) NOT NULL,
+      started_at TIMESTAMP,
+      completed_at TIMESTAMP,
       processing_time_ms BIGINT,
-      image_weight DOUBLE PRECISION
+      image_weight DOUBLE PRECISION DEFAULT 0.7
     ) 
   `);
 
+
+  rfp_line,
+  alternatives,
+  matched_points
+mismatched_points,
+isOverridden
   await knex.raw(`
     CREATE TABLE IF NOT EXISTS rfp_session_items (
       id SERIAL PRIMARY KEY,
       session_id INT NOT NULL REFERENCES rfp_sessions(id) ON DELETE CASCADE,
       item_index INT NOT NULL,
-      rfp_line INT,
+      rfp_line VARCHAR(20),
       query VARCHAR(500),
       description TEXT,
       quantity INT,
@@ -41,7 +47,17 @@ exports.up = async function (knex) {
       rfp_image_base64 TEXT,
       review_status VARCHAR(20) DEFAULT 'pending',
       telegram_message_id BIGINT,
-      created_at TIMESTAMP DEFAULT NOW()
+      created_at TIMESTAMP DEFAULT NOW(),
+      alternatives JSONB  DEFAULT '[]'::jsonb,
+      selected_alternative INT,
+      match_explanation TEXT,
+      matched_points JSONB   DEFAULT '[]'::jsonb,
+      mismatched_points JSONB DEFAULT '[]'::jsonb,
+      override_product_url TEXT,
+      override_product_name VARCHAR(255),
+      override_product_brand VARCHAR(100),
+      is_overridden BOOLEAN DEFAULT false,
+      override_note TEXT
     )
   `);
 
