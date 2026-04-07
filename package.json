@@ -12,7 +12,8 @@
     "seed": "node src/db/seed.js",
     "scrape": "node scripts/scrape-all.js",
     "import:hay": "node scripts/import-hay-products.js",
-    "import:hay:new": "node scripts/import-hay-new-products.js"
+    "import:hay:new": "node scripts/import-hay-new-products.js",
+    "postinstall": "rm -rf node_modules/@xenova/transformers/node_modules/sharp"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -45,5 +46,4 @@
   "devDependencies": {
     "nodemon": "^3.1.0"
   }
-
 }
