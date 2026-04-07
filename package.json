@@ -44,8 +44,6 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
-  },
-  "overrides": {
-    "sharp": "0.33.5"
   }
+
 }
