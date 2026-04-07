@@ -94,7 +94,7 @@ async function getImageEmbedding(imagePath) {
   //   .toBuffer({ resolveWithObject: true });
 
   // const image = new RawImage(new Uint8ClampedArray(data), info.width, info.height, info.channels);
-const processedBuffer = await sharp(imageBuffer)
+const processedBuffer = await sharp(imagePath)
   .resize(224, 224, {
     fit: 'contain',
     background: { r: 255, g: 255, b: 255, alpha: 1 },
