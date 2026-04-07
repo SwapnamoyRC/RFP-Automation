@@ -84,16 +84,26 @@ async function getImageEmbedding(imagePath) {
   if (!imageFeaturePipeline) await initSigLIPModel();
 
   const { RawImage } = await import('@xenova/transformers');
-  const { data, info } = await sharp(fs.readFileSync(imagePath))
-    .resize(224, 224, {
-      fit: 'contain',
-      background: { r: 255, g: 255, b: 255, alpha: 1 },
-    })
-    .flatten({ background: { r: 255, g: 255, b: 255 } })
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+  // const { data, info } = await sharp(fs.readFileSync(imagePath))
+  //   .resize(224, 224, {
+  //     fit: 'contain',
+  //     background: { r: 255, g: 255, b: 255, alpha: 1 },
+  //   })
+  //   .flatten({ background: { r: 255, g: 255, b: 255 } })
+  //   .raw()
+  //   .toBuffer({ resolveWithObject: true });
 
-  const image = new RawImage(new Uint8ClampedArray(data), info.width, info.height, info.channels);
+  // const image = new RawImage(new Uint8ClampedArray(data), info.width, info.height, info.channels);
+const processedBuffer = await sharp(imageBuffer)
+  .resize(224, 224, {
+    fit: 'contain',
+    background: { r: 255, g: 255, b: 255, alpha: 1 },
+  })
+  .flatten({ background: { r: 255, g: 255, b: 255 } })
+  .png() // ✅ IMPORTANT
+  .toBuffer();
+
+const image = await RawImage.fromBlob(processedBuffer);
 
   const output = await imageFeaturePipeline(image);
   return meanPoolAndNormalize(output.data);
@@ -109,16 +119,27 @@ async function getImageEmbeddingFromBuffer(imageBuffer) {
 
   // Use top-level sharp (loaded before @xenova/transformers) to decode to raw
   // pixels — bypasses the broken nested sharp v0.32.6 inside transformers.
-  const { data, info } = await sharp(imageBuffer)
-    .resize(224, 224, {
-      fit: 'contain',
-      background: { r: 255, g: 255, b: 255, alpha: 1 },
-    })
-    .flatten({ background: { r: 255, g: 255, b: 255 } })
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+  // const { data, info } = await sharp(imageBuffer)
+  //   .resize(224, 224, {
+  //     fit: 'contain',
+  //     background: { r: 255, g: 255, b: 255, alpha: 1 },
+  //   })
+  //   .flatten({ background: { r: 255, g: 255, b: 255 } })
+  //   .raw()
+  //   .toBuffer({ resolveWithObject: true });
 
-  const image = new RawImage(new Uint8ClampedArray(data), info.width, info.height, info.channels);
+  // const image = new RawImage(new Uint8ClampedArray(data), info.width, info.height, info.channels);
+
+const processedBuffer = await sharp(imageBuffer)
+  .resize(224, 224, {
+    fit: 'contain',
+    background: { r: 255, g: 255, b: 255, alpha: 1 },
+  })
+  .flatten({ background: { r: 255, g: 255, b: 255 } })
+  .png() // ✅ IMPORTANT
+  .toBuffer();
+
+const image = await RawImage.fromBlob(processedBuffer);
 
   const output = await imageFeaturePipeline(image);
   return meanPoolAndNormalize(output.data);
