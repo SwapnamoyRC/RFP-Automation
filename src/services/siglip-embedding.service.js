@@ -103,7 +103,7 @@ const processedBuffer = await sharp(imagePath)
   .png() // ✅ IMPORTANT
   .toBuffer();
 
-const image = await RawImage.fromBlob(processedBuffer);
+const image = await RawImage.fromBlob(new Blob([processedBuffer], { type: 'image/png' }));
 
   const output = await imageFeaturePipeline(image);
   return meanPoolAndNormalize(output.data);
@@ -139,7 +139,7 @@ const processedBuffer = await sharp(imageBuffer)
   .png() // ✅ IMPORTANT
   .toBuffer();
 
-const image = await RawImage.fromBlob(processedBuffer);
+const image = await RawImage.fromBlob(new Blob([processedBuffer], { type: 'image/png' }));
 
   const output = await imageFeaturePipeline(image);
   return meanPoolAndNormalize(output.data);
