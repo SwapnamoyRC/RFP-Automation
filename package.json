@@ -4,8 +4,8 @@
   "description": "AI-powered RFP automation system for furniture product matching and spec extraction",
   "main": "src/index.js",
   "scripts": {
-    "start": "node --require sharp src/index.js",
-    "dev": "nodemon --require sharp src/index.js",
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
     "migrate": "node src/db/migrate.js latest",
     "migrate:rollback": "node src/db/migrate.js rollback",
     "migrate:status": "node src/db/migrate.js status",
@@ -44,5 +44,8 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
+  },
+  "overrides": {
+    "sharp": "0.33.5"
   }
 }

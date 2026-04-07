@@ -1,4 +1,8 @@
 require('dotenv').config();
+
+// Must be set before any transformers imports
+process.env.TRANSFORMERS_NO_SHARP = "1";
+
 const app = require('./app');
 const { testConnection } = require('./config/database');
 const { runMigrations } = require('./db/migrate');
