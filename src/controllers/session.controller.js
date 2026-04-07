@@ -396,11 +396,12 @@ async function overrideItem(req, res) {
       override_product_url = $1,
       override_product_name = $2,
       override_product_brand = $3,
-      override_note = $4,
+      override_product_image_url = $4,
+      override_note = $5,
       is_overridden = TRUE,
       review_status = 'approved'
-    WHERE id = $5 AND session_id = $6`,
-    [productUrl, productName || null, productBrand || null, note || null, itemId, id]
+    WHERE id = $6 AND session_id = $7`,
+    [productUrl, productName || null, productBrand || null, productImageUrl || null, note || null, itemId, id]
   );
 
   // Save the overridden product to the catalog with embeddings
@@ -434,6 +435,7 @@ async function overrideItem(req, res) {
     override_product_url: productUrl,
     override_product_name: productName,
     override_product_brand: productBrand,
+    override_product_image_url: productImageUrl || null,
     ...counts,
   });
 }

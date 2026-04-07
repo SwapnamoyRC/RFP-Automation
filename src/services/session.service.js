@@ -223,7 +223,7 @@ class SessionService {
       match_source: item.match_source,
       product_name: item.is_overridden ? (item.override_product_name || item.product_name) : item.product_name,
       product_brand: item.is_overridden ? (item.override_product_brand || item.product_brand) : item.product_brand,
-      product_image_url: item.product_image_url,
+      product_image_url: item.is_overridden ? (item.override_product_image_url || item.product_image_url) : item.product_image_url,
       product_specs: JSON.parse(item.product_specs || '{}'),
       rfp_image_base64: item.rfp_image_base64,
       is_overridden: item.is_overridden || false,

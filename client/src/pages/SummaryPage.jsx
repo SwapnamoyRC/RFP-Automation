@@ -178,13 +178,16 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
           <div className="divide-y divide-gray-50">
             {stats.approvedItems.map((item, idx) => {
               const match = item.matchedProduct || {};
+              const displayImage = item.isOverridden && item.overrideProductImageUrl ? item.overrideProductImageUrl : (match.imageUrl || match.image_url);
+              const displayBrand = item.isOverridden ? item.overrideProductBrand : match.brand;
+              const displayName = item.isOverridden ? item.overrideProductName : match.name;
               return (
                 <div key={item.id || idx} className="px-6 py-3 flex items-center gap-4 hover:bg-gray-50">
                   <span className="text-xs text-gray-400 w-6 text-right">{idx + 1}</span>
-                  {match.imageUrl && (
+                  {displayImage && (
                     <img
-                      src={match.imageUrl}
-                      alt={match.name}
+                      src={displayImage}
+                      alt={displayName}
                       className="w-10 h-10 rounded-lg object-contain bg-gray-50 border border-gray-100 shrink-0"
                       onError={e => { e.target.style.display = 'none'; }}
                     />
@@ -194,7 +197,7 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
                       {item.rfpItem || item.description}
                     </p>
                     <p className="text-xs text-gray-500 truncate">
-                      {match.brand} {match.name}
+                      {displayBrand} {displayName}
                       {item.isOverridden && <span className="ml-1 text-amber-600 text-[10px]">(overridden)</span>}
                     </p>
                   </div>

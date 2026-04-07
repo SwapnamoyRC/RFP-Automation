@@ -86,9 +86,10 @@ function OverridePanel({ item, sessionId, onOverride, loading }) {
   const [url, setUrl] = useState(item.overrideProductUrl || '');
   const [name, setName] = useState(item.overrideProductName || '');
   const [brand, setBrand] = useState(item.overrideProductBrand || '');
-  const [imageUrl, setImageUrl] = useState('');
+  const [imageUrl, setImageUrl] = useState(item.overrideProductImageUrl || '');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [editMode, setEditMode] = useState(false);
 
   const handleSave = async () => {
     if (!url.trim()) return;
@@ -101,17 +102,26 @@ function OverridePanel({ item, sessionId, onOverride, loading }) {
         productImageUrl: imageUrl.trim() || undefined,
         note: note.trim() || undefined,
       });
+      setEditMode(false);
     } finally {
       setSaving(false);
     }
   };
 
-  if (item.isOverridden) {
+  if (item.isOverridden && !editMode) {
     return (
       <div className="mt-3 p-3 rounded-xl bg-amber-50 border border-amber-200">
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-          <span className="text-xs font-semibold text-amber-800">Manually overridden</span>
+        <div className="flex items-center justify-between gap-2 mb-1.5">
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+            <span className="text-xs font-semibold text-amber-800">Override active</span>
+          </div>
+          <button
+            onClick={() => setEditMode(true)}
+            className="text-[10px] px-2 py-1 rounded bg-amber-200 text-amber-700 hover:bg-amber-300 font-semibold transition-colors"
+          >
+            Edit
+          </button>
         </div>
         {item.overrideProductName && (
           <p className="text-xs text-amber-700">{item.overrideProductBrand} {item.overrideProductName}</p>
@@ -132,10 +142,20 @@ function OverridePanel({ item, sessionId, onOverride, loading }) {
 
   return (
     <div className="mt-3 p-3 rounded-xl bg-gray-50 border border-gray-200 space-y-2">
-      <p className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
-        <PenLine className="w-3.5 h-3.5 text-gray-500" />
-        Submit Correct Product
-      </p>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <p className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+          <PenLine className="w-3.5 h-3.5 text-gray-500" />
+          {editMode ? 'Edit Override' : 'Submit Correct Product'}
+        </p>
+        {editMode && (
+          <button
+            onClick={() => setEditMode(false)}
+            className="text-[10px] px-2 py-1 rounded bg-gray-200 text-gray-600 hover:bg-gray-300 font-semibold transition-colors"
+          >
+            Cancel
+          </button>
+        )}
+      </div>
       <div>
         <label className="text-[10px] text-gray-500 mb-0.5 block">Product URL *</label>
         <input
@@ -200,7 +220,7 @@ function OverridePanel({ item, sessionId, onOverride, loading }) {
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors disabled:opacity-50"
       >
         {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Link className="w-3 h-3" />}
-        Mark as Final Match
+        {editMode ? 'Update Override' : 'Mark as Final Match'}
       </button>
     </div>
   );
@@ -469,9 +489,9 @@ function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onOverr
         {/* Image Comparison */}
         <ImageCompare
           rfpImage={item.rfpImage || item.imageBase64}
-          matchImage={match.imageUrl || match.image_url}
+          matchImage={item.isOverridden && item.overrideProductImageUrl ? item.overrideProductImageUrl : (match.imageUrl || match.image_url)}
           rfpLabel="RFP Image"
-          matchLabel="Best Match"
+          matchLabel={item.isOverridden ? "Overridden Match" : "Best Match"}
         />
 
         {/* Match Details */}

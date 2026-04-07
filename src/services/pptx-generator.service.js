@@ -159,7 +159,7 @@ async function generatePptx({ clientName, slides }) {
 
     if (rfpLines.length > 0) {
       slide.addText(rfpLines, {
-        x: textX, y: 1.98, w: textW, h: 0.9,
+        x: textX, y: 1.98, w: textW, h: 1.0,
         fontFace: 'Calibri', valign: 'top', wrap: true,
       });
     }
@@ -170,7 +170,7 @@ async function generatePptx({ clientName, slides }) {
 
     if (specsToShow.length > 0) {
       slide.addText('Key Specifications', {
-        x: textX, y: 2.95, w: textW, h: 0.28,
+        x: textX, y: 3.15, w: textW, h: 0.28,
         fontSize: 9, bold: true, color: '888888', fontFace: 'Calibri',
       });
 
@@ -183,7 +183,7 @@ async function generatePptx({ clientName, slides }) {
       }));
 
       slide.addText(specRows, {
-        x: textX + 0.15, y: 3.25, w: textW - 0.2, h: 1.55,
+        x: textX + 0.15, y: 3.45, w: textW - 0.2, h: 1.3,
         fontFace: 'Calibri', valign: 'top', wrap: true,
       });
     }
