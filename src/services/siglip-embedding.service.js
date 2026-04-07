@@ -84,12 +84,17 @@ async function getImageEmbedding(imagePath) {
   if (!imageFeaturePipeline) await initSigLIPModel();
 
   const { RawImage } = await import('@xenova/transformers');
-  const { data, info } = await sharp(fs.readFileSync(imagePath))
+
+  // Decode to raw RGB pixels using the top-level sharp (v0.33.5).
+  // MUST NOT use fromBlob — it triggers the nested sharp inside
+  // @xenova/transformers which loads a conflicting libvips → core dump.
+  const { data, info } = await sharp(imagePath)
     .resize(224, 224, {
       fit: 'contain',
       background: { r: 255, g: 255, b: 255, alpha: 1 },
     })
     .flatten({ background: { r: 255, g: 255, b: 255 } })
+    .removeAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
 
@@ -107,14 +112,16 @@ async function getImageEmbeddingFromBuffer(imageBuffer) {
 
   const { RawImage } = await import('@xenova/transformers');
 
-  // Use top-level sharp (loaded before @xenova/transformers) to decode to raw
-  // pixels — bypasses the broken nested sharp v0.32.6 inside transformers.
+  // Decode to raw RGB pixels using the top-level sharp (v0.33.5).
+  // MUST NOT use fromBlob — it triggers the nested sharp inside
+  // @xenova/transformers which loads a conflicting libvips → core dump.
   const { data, info } = await sharp(imageBuffer)
     .resize(224, 224, {
       fit: 'contain',
       background: { r: 255, g: 255, b: 255, alpha: 1 },
     })
     .flatten({ background: { r: 255, g: 255, b: 255 } })
+    .removeAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
 
