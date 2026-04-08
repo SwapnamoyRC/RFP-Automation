@@ -63,9 +63,6 @@ export function useSession() {
     }
   }, []);
 
-  // Load history on mount (only if authenticated)
-  useEffect(() => { fetchHistory(); }, [fetchHistory]);
-
   // Cleanup polling on unmount
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -246,5 +243,6 @@ export function useSession() {
     downloadPPT,
     loadSession,
     resumePollingIfNeeded,
+    fetchHistory,
   };
 }

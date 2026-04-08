@@ -19,3 +19,19 @@ export async function register(email, password, name) {
   const { data } = await api.post('/register', { email, password, name });
   return data; // { user, token }
 }
+
+export async function logout() {
+  const token = localStorage.getItem('token');
+  if (!token) return; // Already logged out
+
+  try {
+    const { data } = await api.post('/logout', {}, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return data;
+  } catch (err) {
+    // Even if logout fails on backend, we still clear client-side session
+    console.error('Logout API call failed:', err);
+    throw err;
+  }
+}

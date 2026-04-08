@@ -48,10 +48,19 @@ export function useAuth() {
     }
   }, []);
 
-  const logout = useCallback(() => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setUser(null);
+  const logout = useCallback(async () => {
+    try {
+      // Call logout API to invalidate session on backend
+      await authApi.logout();
+    } catch (err) {
+      console.error('Logout failed:', err);
+      // Continue with client-side logout even if API call fails
+    } finally {
+      // Always clear client-side session
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      setUser(null);
+    }
   }, []);
 
   return { user, isAuthenticated, loading, error, login, register, logout };

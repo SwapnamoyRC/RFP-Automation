@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
 import { Toaster } from 'sonner';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
@@ -29,7 +30,15 @@ function App() {
     downloadPPT,
     loadSession,
     resumePollingIfNeeded,
+    fetchHistory,
   } = useSession();
+
+  // Fetch session history when user becomes authenticated
+  useEffect(() => {
+    if (auth.isAuthenticated) {
+      fetchHistory();
+    }
+  }, [auth.isAuthenticated, fetchHistory]);
 
   if (!auth.isAuthenticated) {
     return (
