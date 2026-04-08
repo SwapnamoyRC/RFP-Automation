@@ -142,7 +142,7 @@ export default function LoginPage({ onLogin, onRegister, loading, error }) {
             <span className="text-white text-lg font-bold">RF</span>
           </div>
           <h1 className="text-xl font-bold text-gray-900">RFP Automation</h1>
-          <p className="text-sm text-gray-500 mt-1">Product Matching Dashboard</p>
+          <p className="text-sm text-gray-500 mt-1">Product Matching Dashboard 2</p>
         </div>
 
         {/* Form */}

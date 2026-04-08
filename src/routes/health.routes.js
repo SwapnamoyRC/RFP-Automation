@@ -13,7 +13,7 @@ router.get('/', async (req, res) => {
   }
 
   res.json({
-    status: 'ok',
+    status: 'ok2',
     database: dbStatus,
     uptime: Math.floor(process.uptime()),
     timestamp: new Date().toISOString()
