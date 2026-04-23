@@ -11,6 +11,11 @@ const itemParams = z.object({
   id: z.coerce.number().int().positive('Invalid session ID'),
   itemId: z.coerce.number().int().positive('Invalid item ID'),
 });
+const altItemParams = z.object({
+  id: z.coerce.number().int().positive('Invalid session ID'),
+  itemId: z.coerce.number().int().positive('Invalid item ID'),
+  altIndex: z.coerce.number().int().positive('Invalid alt index'),
+});
 
 // Query schemas
 const listSessionsQuery = z.object({
@@ -44,10 +49,18 @@ const selectAlternativeBody = z.object({
   alternativeIndex: z.coerce.number().int().min(1).max(5, 'alternativeIndex must be between 1 and 5'),
 });
 
+const approveMultipleAlternativesBody = z.object({
+  alternativeIndices: z.array(z.number().int().min(1).max(15)).min(1, 'Must approve at least 1 alternative').max(3, 'Can approve maximum 3 alternatives'),
+});
+
 const overrideItemBody = z.object({
   productUrl: z.string().url('productUrl must be a valid URL'),
   productName: z.string().max(255).optional(),
   productBrand: z.string().max(255).optional(),
+  category: z.string().max(100).optional(),
+  description: z.string().max(2000).optional(),
+  dimensions: z.string().max(500).optional(),
+  materials: z.string().max(500).optional(),
   productImageUrl: z.string().url('productImageUrl must be a valid URL').optional(),
   note: z.string().max(1000).optional(),
 });
@@ -74,9 +87,24 @@ router.get('/:id/items', validateParams(sessionIdParams), sessionController.getS
 router.get('/:id/items/pending', validateParams(sessionIdParams), sessionController.getNextPendingItem);
 router.post('/:id/items/:itemId/review', validateParams(itemParams), validate(reviewItemBody), sessionController.reviewItem);
 router.post('/:id/items/:itemId/select-alternative', validateParams(itemParams), validate(selectAlternativeBody), sessionController.selectAlternative);
+router.post('/:id/items/:itemId/approve-alternatives', validateParams(itemParams), validate(approveMultipleAlternativesBody), sessionController.approveMultipleAlternatives);
 
 // Manual override for an item
 router.post('/:id/items/:itemId/override', validateParams(itemParams), validate(overrideItemBody), sessionController.overrideItem);
+
+// Image picker: fetch all product images / save selected image
+router.get('/:id/items/:itemId/product-images', validateParams(itemParams), sessionController.getProductImages);
+router.patch('/:id/items/:itemId/select-image', validateParams(itemParams), sessionController.selectProductImage);
+router.patch('/:id/items/:itemId/alternatives/:altIndex/select-image', validateParams(altItemParams), sessionController.selectAlternativeImage);
+
+// Stop processing for a session
+router.post('/:id/stop', validateParams(sessionIdParams), sessionController.stopSession);
+
+// Resume processing for a stopped session
+router.post('/:id/resume', validateParams(sessionIdParams), sessionController.resumeSession);
+
+// Retry a failed item
+router.post('/:id/items/:itemId/retry', validateParams(itemParams), sessionController.retryItem);
 
 // Generate PPT from approved items
 router.post('/:id/generate', validateParams(sessionIdParams), validate(generateBody), sessionController.generateFromSession);

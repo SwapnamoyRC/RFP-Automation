@@ -3,12 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle2, XCircle, ChevronDown, ChevronUp, ArrowRight,
   Search, Filter, Package, Loader2, RefreshCw, ImageOff,
-  Check, X, Link, PenLine, AlertTriangle, Database,
+  Check, X, Link, PenLine, AlertTriangle, Database, Square, CheckSquare, Images,
 } from 'lucide-react';
 import StatusBadge from '../components/StatusBadge';
 import ConfidenceMeter from '../components/ConfidenceMeter';
 import ImageCompare from '../components/ImageCompare';
-import { listProducts } from '../api/sessions';
+import { listProducts, getProductImages, selectProductImage } from '../api/sessions';
 
 // ── Parse plain-text explanation into structured matched/mismatched points ─────
 // Used as a fallback when the DB doesn't have structured points yet
@@ -87,6 +87,10 @@ function OverridePanel({ item, sessionId, onOverride, loading }) {
   const [name, setName] = useState(item.overrideProductName || '');
   const [brand, setBrand] = useState(item.overrideProductBrand || '');
   const [imageUrl, setImageUrl] = useState(item.overrideProductImageUrl || '');
+  const [category, setCategory] = useState('');
+  const [description, setDescription] = useState('');
+  const [dimensions, setDimensions] = useState('');
+  const [materials, setMaterials] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -100,6 +104,10 @@ function OverridePanel({ item, sessionId, onOverride, loading }) {
         productName: name.trim() || undefined,
         productBrand: brand.trim() || undefined,
         productImageUrl: imageUrl.trim() || undefined,
+        category: category.trim() || undefined,
+        description: description.trim() || undefined,
+        dimensions: dimensions.trim() || undefined,
+        materials: materials.trim() || undefined,
         note: note.trim() || undefined,
       });
       setEditMode(false);
@@ -186,6 +194,54 @@ function OverridePanel({ item, sessionId, onOverride, loading }) {
             value={brand}
             onChange={e => setBrand(e.target.value)}
             placeholder="e.g. Herman Miller"
+            className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-primary-500 outline-none bg-white"
+            disabled={loading || saving}
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[10px] text-gray-500 mb-0.5 block">Category (optional)</label>
+          <input
+            type="text"
+            value={category}
+            onChange={e => setCategory(e.target.value)}
+            placeholder="e.g. Office Chair"
+            className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-primary-500 outline-none bg-white"
+            disabled={loading || saving}
+          />
+        </div>
+        <div>
+          <label className="text-[10px] text-gray-500 mb-0.5 block">Materials (optional)</label>
+          <input
+            type="text"
+            value={materials}
+            onChange={e => setMaterials(e.target.value)}
+            placeholder="e.g. Leather, Aluminum"
+            className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-primary-500 outline-none bg-white"
+            disabled={loading || saving}
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[10px] text-gray-500 mb-0.5 block">Dimensions (optional)</label>
+          <input
+            type="text"
+            value={dimensions}
+            onChange={e => setDimensions(e.target.value)}
+            placeholder="e.g. 80 x 60 x 100 cm"
+            className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-primary-500 outline-none bg-white"
+            disabled={loading || saving}
+          />
+        </div>
+        <div>
+          <label className="text-[10px] text-gray-500 mb-0.5 block">Description (optional)</label>
+          <input
+            type="text"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder="Product description..."
             className="w-full px-2.5 py-1.5 border border-gray-200 rounded-lg text-xs focus:ring-1 focus:ring-primary-500 outline-none bg-white"
             disabled={loading || saving}
           />
@@ -381,60 +437,470 @@ function SearchProductModal({ open, onClose, onSelect }) {
   );
 }
 
-// ── Alternatives Panel ────────────────────────────────────────────────────────
-function AlternativesPanel({ alternatives, onSelect, loading }) {
-  if (!alternatives || alternatives.length === 0) {
-    return <p className="text-xs text-gray-400 italic py-2">No alternatives available</p>;
-  }
-
+// ── Image Picker Modal (shared by main product + alternatives) ────────────────
+function ImagePickerModal({ open, onClose, images, selected, onSelect, productName, productBrand, loading }) {
+  if (!open) return null;
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
-      {alternatives.map((alt, idx) => (
-        <button
-          key={idx}
-          onClick={() => onSelect(idx + 1)}
-          disabled={loading}
-          className="group p-3 rounded-xl border border-gray-200 hover:border-primary-300 hover:bg-primary-50 transition-all text-left"
-        >
-          <div className="flex items-start gap-3">
-            {alt.imageUrl ? (
-              <img
-                src={alt.imageUrl}
-                alt={alt.name}
-                className="w-14 h-14 rounded-lg object-contain bg-gray-50 border border-gray-100"
-                onError={e => { e.target.style.display = 'none'; }}
-              />
-            ) : (
-              <div className="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center">
-                <ImageOff className="w-5 h-5 text-gray-300" />
-              </div>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col m-4"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between shrink-0">
+          <div>
+            <h2 className="text-base font-bold text-gray-900 flex items-center gap-2">
+              <Images className="w-4 h-4 text-primary-600" />
+              Select PPT Image
+            </h2>
+            {(productBrand || productName) && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                {productBrand && <span className="font-medium text-primary-600">{productBrand}</span>}
+                {productBrand && productName && ' · '}
+                {productName}
+              </p>
             )}
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-gray-900 truncate">{alt.brand} {alt.name}</p>
-              {alt.explanation && (
-                <p className="text-[10px] text-blue-600 mt-0.5 line-clamp-2 italic">{alt.explanation}</p>
-              )}
-              <div className="flex items-center gap-2 mt-1.5">
-                <ConfidenceMeter score={alt.similarity} className="flex-1" />
-              </div>
-            </div>
           </div>
-        </button>
-      ))}
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              <Loader2 className="w-6 h-6 text-primary-500 animate-spin" />
+              <p className="text-sm text-gray-500">Loading images...</p>
+            </div>
+          ) : images.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 gap-3">
+              <ImageOff className="w-8 h-8 text-gray-200" />
+              <p className="text-sm text-gray-500">No images found in catalog</p>
+            </div>
+          ) : (
+            <>
+              <p className="text-xs text-gray-400 mb-4">
+                Click an image to select it for the PPT slide. {selected ? '1 image selected.' : ''}
+              </p>
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                {images.map((url, i) => (
+                  <button
+                    key={i}
+                    onClick={() => { onSelect(url); onClose(); }}
+                    className={`relative aspect-square rounded-xl overflow-hidden border-2 transition-all ${
+                      selected === url
+                        ? 'border-primary-600 ring-2 ring-primary-200'
+                        : 'border-gray-200 hover:border-primary-400'
+                    }`}
+                  >
+                    <img
+                      src={url}
+                      alt=""
+                      className="w-full h-full object-contain bg-gray-50 p-1"
+                      onError={e => { e.target.style.display = 'none'; }}
+                    />
+                    {selected === url && (
+                      <div className="absolute inset-0 bg-primary-600/10 flex items-end justify-center pb-2">
+                        <span className="bg-primary-600 text-white text-[10px] font-semibold px-2 py-0.5 rounded-full">
+                          ✓ Selected
+                        </span>
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
+// ── Alternatives Panel ────────────────────────────────────────────────────────
+// ── Alt Image Picker button → opens modal ─────────────────────────────────────
+function AltImagePickerStrip({ sessionId, itemId, alt, altIndex, onImageSelected }) {
+  const productKey = `${alt.name}|||${alt.brand}`;
+  const [images, setImages] = useState([]);
+  const [selected, setSelected] = useState(alt.selectedImageUrl || alt.imageUrl);
+  const [loading, setLoading] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const prevKeyRef = useRef(productKey);
+
+  useEffect(() => {
+    if (prevKeyRef.current !== productKey) {
+      prevKeyRef.current = productKey;
+      setImages([]);
+      setSelected(alt.selectedImageUrl || alt.imageUrl);
+      setModalOpen(false);
+    }
+  }, [productKey, alt.selectedImageUrl, alt.imageUrl]);
+
+  const openModal = async () => {
+    setModalOpen(true);
+    if (images.length > 0) return;
+    setLoading(true);
+    try {
+      const data = await getProductImages(sessionId, itemId, { name: alt.name || alt.product_name, brand: alt.brand || alt.product_brand, altIndex });
+      setImages(data.images || []);
+      setSelected(data.selected_image_url || alt.imageUrl);
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelect = (url) => {
+    setSelected(url);
+    onImageSelected && onImageSelected(altIndex, url);
+  };
+
+  const isPicked = selected && selected !== alt.imageUrl;
+
+  return (
+    <>
+      <button
+        onClick={openModal}
+        className={`flex items-center gap-1 text-[10px] transition-colors mt-1.5 ${
+          isPicked ? 'text-primary-600 font-medium' : 'text-gray-400 hover:text-primary-600'
+        }`}
+      >
+        <Images className="w-2.5 h-2.5" />
+        {isPicked ? '✓ Image picked' : 'Pick PPT image'}
+      </button>
+      <ImagePickerModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        images={images}
+        selected={selected}
+        onSelect={handleSelect}
+        productName={alt.name || alt.product_name}
+        productBrand={alt.brand || alt.product_brand}
+        loading={loading}
+      />
+    </>
+  );
+}
+
+function AlternativesPanel({ alternatives, approvedIndices = [], isMainApproved = false, mainProduct = {}, onSelect, onApproveMultiple, loading, sessionId, itemId, onSelectAltImage }) {
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedIndices, setSelectedIndices] = useState(new Set(approvedIndices));
+  // Track locally picked images per altIndex so card thumbnail updates immediately
+  const [altPickedImages, setAltPickedImages] = useState({});
+
+  const handleAltImageSelected = (altIndex, url) => {
+    setAltPickedImages(prev => ({ ...prev, [altIndex]: url }));
+    onSelectAltImage && onSelectAltImage(altIndex, url);
+  };
+
+  // Filter out the main product from alternatives to prevent duplicate selection
+  // Keep track of original indices to send correct indices to backend
+  const altIndexMap = []; // Maps filtered index to original index
+  const filteredAlternatives = (alternatives || []).reduce((acc, alt, originalIdx) => {
+    const mainName = (mainProduct.name || '').toLowerCase().trim();
+    const mainBrand = (mainProduct.brand || '').toLowerCase().trim();
+    const altName = (alt.name || alt.product_name || '').toLowerCase().trim();
+    const altBrand = (alt.brand || alt.product_brand || '').toLowerCase().trim();
+
+    if (!(mainName && mainBrand && mainName === altName && mainBrand === altBrand)) {
+      altIndexMap.push(originalIdx); // Store the original 0-based index
+      acc.push(alt);
+    }
+    return acc;
+  }, []);
+
+  if (!filteredAlternatives || filteredAlternatives.length === 0) {
+    return <p className="text-xs text-gray-400 italic py-2">No other alternatives available</p>;
+  }
+
+  const handleToggleSelect = (filteredIdx) => {
+    const originalIdx = altIndexMap[filteredIdx] + 1; // Convert to 1-based for database
+    const newSelected = new Set(selectedIndices);
+    if (newSelected.has(originalIdx)) {
+      newSelected.delete(originalIdx);
+    } else {
+      newSelected.add(originalIdx);
+    }
+    setSelectedIndices(newSelected);
+  };
+
+  const handleApproveMultiple = async () => {
+    if (selectedIndices.size === 0) return;
+    const indices = Array.from(selectedIndices).sort((a, b) => a - b);
+    await onApproveMultiple(indices);
+    setMultiSelectMode(false);
+    setSelectedIndices(new Set());
+  };
+
+  return (
+    <div className="space-y-3 mt-3">
+      {/* Mode Toggle */}
+      <div className="flex items-center justify-between gap-2 pb-2 border-b border-gray-100">
+        <button
+          onClick={() => {
+            setMultiSelectMode(!multiSelectMode);
+            // Reset to just approved indices when exiting multi-select
+            if (multiSelectMode) {
+              setSelectedIndices(new Set(approvedIndices));
+            }
+          }}
+          className="text-xs font-medium text-gray-600 hover:text-primary-600 transition-colors flex items-center gap-1.5"
+        >
+          {multiSelectMode ? '✕ Cancel' : '✓ Approve Multiple'}
+        </button>
+        {multiSelectMode && (
+          <div className="flex items-center gap-2">
+            {isMainApproved && (
+              <span className="text-xs text-emerald-700 bg-emerald-50 px-2 py-1 rounded-full font-medium">
+                Main ✓
+              </span>
+            )}
+            {selectedIndices.size > 0 && (
+              <span className="text-xs text-gray-500 font-medium">
+                +{selectedIndices.size} alt{selectedIndices.size !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Alternatives Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {filteredAlternatives.map((alt, idx) => (
+          <div key={idx}>
+            {multiSelectMode ? (
+              // Multi-select mode
+              <div className={`w-full p-3 rounded-xl border-2 transition-all ${
+                selectedIndices.has(altIndexMap[idx] + 1)
+                  ? 'border-primary-400 bg-primary-50'
+                  : 'border-gray-200 bg-white'
+              }`}>
+                <button
+                  onClick={() => handleToggleSelect(idx)}
+                  disabled={loading}
+                  className="w-full text-left disabled:opacity-50"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5">
+                      {selectedIndices.has(altIndexMap[idx] + 1) ? (
+                        <CheckSquare className="w-4 h-4 text-primary-600" />
+                      ) : (
+                        <Square className="w-4 h-4 text-gray-300" />
+                      )}
+                    </div>
+                    {(altPickedImages[altIndexMap[idx] + 1] || alt.selectedImageUrl || alt.imageUrl) ? (
+                      <img
+                        src={altPickedImages[altIndexMap[idx] + 1] || alt.selectedImageUrl || alt.imageUrl}
+                        alt={alt.name}
+                        className="w-12 h-12 rounded-lg object-contain bg-gray-50 border border-gray-100"
+                        onError={e => { e.target.style.display = 'none'; }}
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center">
+                        <ImageOff className="w-4 h-4 text-gray-300" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-gray-900 truncate">{alt.brand} {alt.name}</p>
+                      {alt.explanation && (
+                        <p className="text-[10px] text-blue-600 mt-0.5 line-clamp-1 italic">{alt.explanation}</p>
+                      )}
+                      <div className="flex items-center gap-2 mt-1">
+                        <ConfidenceMeter score={alt.similarity} className="flex-1" />
+                      </div>
+                    </div>
+                  </div>
+                </button>
+                {sessionId && itemId && (
+                  <AltImagePickerStrip
+                    sessionId={sessionId}
+                    itemId={itemId}
+                    alt={alt}
+                    altIndex={altIndexMap[idx] + 1}
+                    onImageSelected={handleAltImageSelected}
+                  />
+                )}
+              </div>
+            ) : (
+              // Single select mode
+              (() => {
+                const originalIdx1Based = altIndexMap[idx] + 1;
+                const isApproved = approvedIndices.includes(originalIdx1Based);
+                return (
+                  <div className={`w-full p-3 rounded-xl border transition-all text-left ${
+                    isApproved ? 'border-emerald-300 bg-emerald-50' : 'border-gray-200 bg-white'
+                  }`}>
+                    <button
+                      onClick={() => !isApproved && onSelect(originalIdx1Based)}
+                      disabled={loading || isApproved}
+                      className="w-full text-left disabled:cursor-default"
+                    >
+                      <div className="flex items-start gap-3">
+                        {(altPickedImages[originalIdx1Based] || alt.selectedImageUrl || alt.imageUrl) ? (
+                          <img
+                            src={altPickedImages[originalIdx1Based] || alt.selectedImageUrl || alt.imageUrl}
+                            alt={alt.name}
+                            className="w-14 h-14 rounded-lg object-contain bg-gray-50 border border-gray-100"
+                            onError={e => { e.target.style.display = 'none'; }}
+                          />
+                        ) : (
+                          <div className="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center">
+                            <ImageOff className="w-5 h-5 text-gray-300" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-xs font-semibold text-gray-900 truncate">{alt.brand} {alt.name}</p>
+                            {isApproved && <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />}
+                          </div>
+                          {alt.explanation && (
+                            <p className="text-[10px] text-blue-600 mt-0.5 line-clamp-2 italic">{alt.explanation}</p>
+                          )}
+                          <div className="flex items-center gap-2 mt-1.5">
+                            <ConfidenceMeter score={alt.similarity} className="flex-1" />
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                    {sessionId && itemId && (
+                      <AltImagePickerStrip
+                        sessionId={sessionId}
+                        itemId={itemId}
+                        alt={alt}
+                        altIndex={originalIdx1Based}
+                        onImageSelected={handleAltImageSelected}
+                      />
+                    )}
+                  </div>
+                );
+              })()
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Approve Multiple Button */}
+      {multiSelectMode && selectedIndices.size > 0 && (
+        <div className="pt-2 border-t border-gray-100 space-y-2">
+          <button
+            onClick={handleApproveMultiple}
+            disabled={loading}
+            className="w-full px-4 py-2.5 rounded-xl bg-primary-600 text-white text-sm font-semibold hover:bg-primary-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {loading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Approving {selectedIndices.size} Option{selectedIndices.size > 1 ? 's' : ''}...
+              </>
+            ) : (
+              <>
+                <CheckCircle2 className="w-4 h-4" />
+                Approve {selectedIndices.size} Option{selectedIndices.size > 1 ? 's' : ''}
+              </>
+            )}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Image Picker (main product) → opens modal ────────────────────────────────
+function ImagePickerStrip({ sessionId, item, onImageSelected }) {
+  const productKey = `${item.matchedProduct?.name}|||${item.matchedProduct?.brand}`;
+  const [images, setImages] = useState([]);
+  const [selected, setSelected] = useState(item.selectedImageUrl || item.matchedProduct?.imageUrl);
+  const [loading, setLoading] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const prevKeyRef = useRef(productKey);
+
+  useEffect(() => {
+    if (prevKeyRef.current !== productKey) {
+      prevKeyRef.current = productKey;
+      setImages([]);
+      setSelected(item.selectedImageUrl || item.matchedProduct?.imageUrl);
+      setModalOpen(false);
+    }
+  }, [productKey, item.selectedImageUrl, item.matchedProduct?.imageUrl]);
+
+  const openModal = async () => {
+    setModalOpen(true);
+    if (images.length > 0) return;
+    setLoading(true);
+    try {
+      const data = await getProductImages(sessionId, item.id);
+      setImages(data.images || []);
+      setSelected(data.selected_image_url || item.matchedProduct?.imageUrl);
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelect = async (url) => {
+    setSelected(url);
+    try {
+      await selectProductImage(sessionId, item.id, url);
+      onImageSelected(url);
+    } catch { /* ignore */ }
+  };
+
+  const isPicked = selected && selected !== item.matchedProduct?.imageUrl;
+
+  return (
+    <>
+      <button
+        onClick={openModal}
+        disabled={loading}
+        className={`flex items-center gap-1 text-xs transition-colors mt-2 ${
+          isPicked ? 'text-primary-600 font-medium' : 'text-gray-400 hover:text-primary-600'
+        }`}
+      >
+        {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Images className="w-3 h-3" />}
+        {isPicked ? '✓ Image picked' : 'Pick PPT image'}
+      </button>
+      <ImagePickerModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        images={images}
+        selected={selected}
+        onSelect={handleSelect}
+        productName={item.matchedProduct?.name}
+        productBrand={item.matchedProduct?.brand}
+        loading={loading}
+      />
+    </>
+  );
+}
+
 // ── Review Card ───────────────────────────────────────────────────────────────
-function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onOverride }) {
+function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onApproveMultiple, onOverride, onRetryItem, onSelectImage, onSelectAltImage }) {
   const [expanded, setExpanded] = useState(false);
   const [showOverride, setShowOverride] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [pickedImage, setPickedImage] = useState(item.selectedImageUrl || null);
 
   const match = item.matchedProduct || {};
+
+  // Reset picked image when the matched product changes (alternative selected)
+  const matchKey = `${match.name}|||${match.brand}`;
+  const prevMatchKeyRef = useRef(matchKey);
+  useEffect(() => {
+    if (prevMatchKeyRef.current !== matchKey) {
+      prevMatchKeyRef.current = matchKey;
+      setPickedImage(item.selectedImageUrl || null);
+    }
+  }, [matchKey, item.selectedImageUrl]);
   const alts = item.alternatives || [];
   const isReviewed = item.status === 'approved' || item.status === 'rejected';
+  const approvedIndices = item.approvedAlternativeIndices || [];
+  const totalApproved = (isReviewed ? 1 : 0) + approvedIndices.length;
 
   const handleAction = async (action) => {
     setActionLoading(true);
@@ -450,6 +916,16 @@ function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onOverr
     setActionLoading(true);
     try {
       await onSelectAlt(sessionId, item.id, altIndex);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleApproveMultiple = async (altIndices) => {
+    setActionLoading(true);
+    try {
+      await onApproveMultiple(sessionId, item.id, altIndices);
+      setExpanded(false);
     } finally {
       setActionLoading(false);
     }
@@ -489,19 +965,39 @@ function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onOverr
         {/* Image Comparison */}
         <ImageCompare
           rfpImage={item.rfpImage || item.imageBase64}
-          matchImage={item.isOverridden && item.overrideProductImageUrl ? item.overrideProductImageUrl : (match.imageUrl || match.image_url)}
+          matchImage={pickedImage || (item.isOverridden && item.overrideProductImageUrl ? item.overrideProductImageUrl : (match.imageUrl || match.image_url))}
           rfpLabel="RFP Image"
           matchLabel={item.isOverridden ? "Overridden Match" : "Best Match"}
         />
 
+        {/* Image Picker — only for non-overridden items with a matched product */}
+        {!item.isOverridden && match.name && (
+          <ImagePickerStrip
+            sessionId={sessionId}
+            item={item}
+            onImageSelected={(url) => {
+              setPickedImage(url);
+              onSelectImage && onSelectImage(sessionId, item.id, url);
+            }}
+          />
+        )}
+
         {/* Match Details */}
         {match.name && (
-          <div className="mt-4 p-3 rounded-xl bg-gray-50 border border-gray-100">
+          <div className={`mt-4 p-3 rounded-xl border ${
+            isReviewed ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-100'
+          }`}>
             <div className="flex items-center gap-2">
-              <Package className="w-4 h-4 text-gray-400" />
+              {isReviewed && <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />}
+              {!isReviewed && <Package className="w-4 h-4 text-gray-400" />}
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-gray-900">{match.brand} {match.name}</p>
               </div>
+              {totalApproved > 1 && (
+                <span className="text-xs font-semibold px-2 py-1 rounded-full bg-emerald-200 text-emerald-800">
+                  +{totalApproved - 1} alt
+                </span>
+              )}
             </div>
 
             {/* AI Match Breakdown — ticks/crosses from structured points or parsed explanation */}
@@ -544,6 +1040,27 @@ function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onOverr
               className="text-xs text-gray-500 hover:text-gray-700 underline underline-offset-2"
             >
               {item.status === 'approved' ? 'Change to Rejected' : 'Change to Approved'}
+            </button>
+          </div>
+        )}
+
+        {/* Failed item retry */}
+        {item.matchSource === 'error' && onRetryItem && (
+          <div className="mt-3 p-3 rounded-lg bg-red-50 border border-red-200">
+            <p className="text-xs text-red-700 mb-2 font-semibold">Match failed - please retry</p>
+            <button
+              onClick={async () => {
+                setActionLoading(true);
+                try {
+                  await onRetryItem(sessionId, item.id);
+                } finally {
+                  setActionLoading(false);
+                }
+              }}
+              disabled={actionLoading}
+              className="w-full px-3 py-1.5 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors disabled:opacity-50"
+            >
+              {actionLoading ? 'Retrying...' : 'Retry Match'}
             </button>
           </div>
         )}
@@ -612,11 +1129,25 @@ function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onOverr
       {/* Alternatives Panel */}
       {expanded && alts.length > 0 && (
         <div className="px-5 pb-5 border-t border-gray-100 pt-3">
-          <p className="text-xs font-semibold text-gray-700 mb-2">Alternative Matches</p>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-semibold text-gray-700">Alternative Matches</p>
+            {isReviewed && (
+              <p className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">
+                Main product already approved
+              </p>
+            )}
+          </div>
           <AlternativesPanel
             alternatives={alts}
+            approvedIndices={item.approvedAlternativeIndices || []}
+            isMainApproved={isReviewed}
+            mainProduct={match}
             onSelect={handleSelectAlt}
+            onApproveMultiple={handleApproveMultiple}
             loading={actionLoading}
+            sessionId={sessionId}
+            itemId={item.id}
+            onSelectAltImage={(altIndex, url) => onSelectAltImage && onSelectAltImage(sessionId, item.id, altIndex, url)}
           />
         </div>
       )}
@@ -625,7 +1156,7 @@ function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onOverr
 }
 
 // ── Review Page ───────────────────────────────────────────────────────────────
-export default function ReviewPage({ items, session, onApprove, onReject, onSelectAlt, onOverride, onRefresh, onResumePolling, processing, progress }) {
+export default function ReviewPage({ items, session, onApprove, onReject, onSelectAlt, onApproveMultiple, onOverride, onSelectImage, onSelectAltImage, onRefresh, onResumePolling, onStop, onResume, onRetryItem, processing, progress }) {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -717,15 +1248,7 @@ export default function ReviewPage({ items, session, onApprove, onReject, onSele
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {onRefresh && (
-            <button
-              onClick={() => onRefresh(session?.id)}
-              className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50"
-              title="Refresh"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-          )}
+
           {stats.approved > 0 && (
             <button
               onClick={() => navigate('/summary')}
@@ -791,11 +1314,21 @@ export default function ReviewPage({ items, session, onApprove, onReject, onSele
       {/* Processing Progress Banner */}
       {processing && progress && (
         <div className="mb-5 p-4 rounded-xl bg-primary-50 border border-primary-200">
-          <div className="flex items-center gap-3 mb-2">
-            <Loader2 className="w-5 h-5 text-primary-600 animate-spin" />
-            <p className="text-sm font-semibold text-primary-900">
-              Processing items... {progress.processed_items} of {progress.total_items} complete
-            </p>
+          <div className="flex items-center gap-3 mb-2 justify-between">
+            <div className="flex items-center gap-3">
+              <Loader2 className="w-5 h-5 text-primary-600 animate-spin" />
+              <p className="text-sm font-semibold text-primary-900">
+                Processing items... {progress.processed_items} of {progress.total_items} complete
+              </p>
+            </div>
+            {onStop && (
+              <button
+                onClick={() => onStop(session?.id)}
+                className="px-3 py-1 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors"
+              >
+                Stop Processing
+              </button>
+            )}
           </div>
           <div className="h-2 bg-primary-100 rounded-full overflow-hidden">
             <div
@@ -809,6 +1342,33 @@ export default function ReviewPage({ items, session, onApprove, onReject, onSele
         </div>
       )}
 
+      {/* Resume Processing Banner */}
+      {!processing && session?.total_items && items.length < session.total_items && (
+        <div className="mb-5 p-4 rounded-xl bg-blue-50 border border-blue-200">
+          <div className="flex items-center gap-3 justify-between">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="w-5 h-5 text-blue-600" />
+              <div>
+                <p className="text-sm font-semibold text-blue-900">
+                  Processing was stopped
+                </p>
+                <p className="text-xs text-blue-700 mt-0.5">
+                  {items.length} of {session.total_items} items processed. {session.total_items - items.length} items remaining.
+                </p>
+              </div>
+            </div>
+            {onResume && (
+              <button
+                onClick={() => onResume(session?.id)}
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors whitespace-nowrap"
+              >
+                Resume Processing
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Items Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {filtered.map((item, idx) => (
@@ -819,7 +1379,11 @@ export default function ReviewPage({ items, session, onApprove, onReject, onSele
             onApprove={onApprove}
             onReject={onReject}
             onSelectAlt={onSelectAlt}
+            onApproveMultiple={onApproveMultiple}
             onOverride={onOverride}
+            onSelectImage={onSelectImage}
+            onSelectAltImage={onSelectAltImage}
+            onRetryItem={onRetryItem}
           />
         ))}
       </div>

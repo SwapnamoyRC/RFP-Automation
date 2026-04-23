@@ -37,11 +37,42 @@ export default function UploadPage({ onProcess }) {
 
     try {
       setProgress('Uploading RFP...');
-      await onProcess(clientName || 'Web Client', file, { imageWeight });
+      const result = await onProcess(clientName || 'Web Client', file, { imageWeight });
+
+      // Check for format warnings
+      if (result.warnings && result.warnings.length > 0) {
+        result.warnings.forEach(warning => {
+          if (warning.severity === 'error') {
+            const issueText = warning.issues && warning.issues.length > 0
+              ? ` ${warning.issues[0]}`
+              : '';
+            toast.error(warning.message + issueText);
+          }
+        });
+      }
+
       setProgress('Processing started! Redirecting to review...');
       setTimeout(() => navigate('/review'), 1000);
     } catch (err) {
-      toast.error(extractError(err, 'Processing failed'));
+      const errorMsg = extractError(err, 'Processing failed');
+      // Check if it's a format/parsing error
+      if (err.response?.data?.error === 'No products found in Excel file') {
+        const details = err.response?.data?.details || [];
+        if (details.length > 0) {
+          details.forEach(detail => {
+            const issueText = detail.issues && detail.issues.length > 0
+              ? ` ${detail.issues[0]}`
+              : '';
+            toast.error(`Sheet "${detail.sheet}": ${detail.message}${issueText}`, {
+              duration: 6000,
+            });
+          });
+        } else {
+          toast.error(errorMsg, { duration: 6000 });
+        }
+      } else {
+        toast.error(errorMsg);
+      }
       setProcessing(false);
     }
   };

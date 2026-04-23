@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus, ExternalLink, Trash2, CheckCircle2, XCircle, Clock,
   Package, Loader2, BookOpen, RefreshCw, Download, Search,
-  ChevronLeft, ChevronRight, ImageOff, ArrowLeft,
+  ChevronLeft, ChevronRight, ImageOff, ArrowLeft, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as api from '../api/sessions';
@@ -11,10 +11,129 @@ import ConfirmDialog from '../components/ConfirmDialog';
 
 const CATEGORIES = ['Seating', 'Tables', 'Storage', 'Lighting', 'Accessories', 'Outdoor', 'Other'];
 
-// ── Product Card (catalog browse) ────────────────────────────────────────────
-function ProductCard({ product }) {
+// ── Product Modal ───────────────────────────────────────────────────────────
+function ProductModal({ product, onClose }) {
+  if (!product) return null;
+
   return (
-    <div className="bg-white rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-sm transition-all overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      {/* Blurred background */}
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+
+      {/* Modal */}
+      <div className="relative bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        {/* Close button */}
+        <button
+          onClick={onClose}
+          className="absolute -top-1 right-1 p-2 rounded-lg hover:bg-gray-100 transition-colors z-10"
+        >
+          <X className="w-5 h-5 text-gray-500" />
+        </button>
+
+        {/* Content */}
+        <div className="p-8">
+          {/* Product Image */}
+          {product.image_url ? (
+            <img
+              src={product.image_url}
+              alt={product.name}
+              className="w-full h-80 object-contain bg-gray-50 rounded-xl border border-gray-200 mb-6"
+              onError={e => { e.target.style.display = 'none'; }}
+            />
+          ) : (
+            <div className="w-full h-80 bg-gray-50 rounded-xl border border-gray-200 flex items-center justify-center mb-6">
+              <ImageOff className="w-16 h-16 text-gray-200" />
+            </div>
+          )}
+
+          {/* Product Name & Brand */}
+          <div className="mb-6">
+            <h2 className="text-3xl font-bold text-gray-900 mb-2">{product.name}</h2>
+            {product.brand_name && (
+              <p className="text-lg text-primary-600 font-semibold">{product.brand_name}</p>
+            )}
+          </div>
+
+          {/* Category Badge */}
+          {product.category && (
+            <div className="mb-6">
+              <span className="inline-block text-xs font-semibold text-gray-700 bg-gray-100 px-3 py-1 rounded-full">
+                {product.category}
+              </span>
+            </div>
+          )}
+
+          {/* Description */}
+          {product.description && (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Description</h3>
+              <p className="text-sm text-gray-600">{product.description}</p>
+            </div>
+          )}
+
+          {/* Dimensions */}
+          {product.dimensions && (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Dimensions</h3>
+              <p className="text-sm text-gray-600">{product.dimensions}</p>
+            </div>
+          )}
+
+          {/* Materials */}
+          {product.materials && (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Materials</h3>
+              <p className="text-sm text-gray-600">{product.materials}</p>
+            </div>
+          )}
+
+          {/* Designer */}
+          {product.designer && (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Designer</h3>
+              <p className="text-sm text-gray-600">{product.designer}</p>
+            </div>
+          )}
+
+          {/* Source URL */}
+          {product.source_url && (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-gray-700 mb-2">Source</h3>
+              <a
+                href={product.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 text-primary-600 hover:text-primary-700 font-medium"
+              >
+                <ExternalLink className="w-4 h-4" />
+                Visit Product Page
+              </a>
+            </div>
+          )}
+
+          {/* Last Scraped */}
+          {product.last_scraped_at && (
+            <div className="pt-4 border-t border-gray-200">
+              <p className="text-xs text-gray-400">
+                Last updated: {new Date(product.last_scraped_at).toLocaleDateString('en-US', {
+                  year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                })}
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Product Card (catalog browse) ────────────────────────────────────────────
+function ProductCard({ product, onClick }) {
+  return (
+    <div
+      onClick={onClick}
+      className="bg-white rounded-xl border border-gray-200 hover:border-gray-300 hover:shadow-lg hover:scale-105 transition-all overflow-hidden cursor-pointer"
+    >
       {product.image_url ? (
         <img
           src={product.image_url}
@@ -46,11 +165,15 @@ function ProductCard({ product }) {
         {product.dimensions && (
           <p className="text-[10px] text-gray-400 mt-1">{product.dimensions}</p>
         )}
+        {product.materials && (
+          <p className="text-[10px] text-gray-400 mt-1">{product.materials}</p>
+        )}
         {product.source_url && (
           <a
             href={product.source_url}
             target="_blank"
             rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
             className="flex items-center gap-0.5 text-[10px] text-primary-600 hover:underline mt-1.5 truncate"
           >
             <ExternalLink className="w-2.5 h-2.5 shrink-0" />
@@ -71,6 +194,7 @@ function CatalogBrowse({ onAddMore }) {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [selectedProduct, setSelectedProduct] = useState(null);
   const debounceRef = useRef(null);
 
   const fetchProducts = useCallback(async (searchTerm, pg, brand) => {
@@ -190,10 +314,17 @@ function CatalogBrowse({ onAddMore }) {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
           {products.map(product => (
-            <ProductCard key={product.id} product={product} />
+            <ProductCard
+              key={product.id}
+              product={product}
+              onClick={() => setSelectedProduct(product)}
+            />
           ))}
         </div>
       )}
+
+      {/* Product Modal */}
+      <ProductModal product={selectedProduct} onClose={() => setSelectedProduct(null)} />
 
       {/* Pagination */}
       {totalPages > 1 && (

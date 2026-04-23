@@ -27,10 +27,16 @@ function App() {
     rejectItem,
     pickAlternative,
     overrideItem,
+    selectImage,
+    selectAltImage,
     downloadPPT,
     loadSession,
     resumePollingIfNeeded,
     fetchHistory,
+    stopProcessing,
+    resumeProcessing,
+    retryFailedItem,
+    approveMultipleAlternatives,
   } = useSession();
 
   // Fetch session history when user becomes authenticated
@@ -77,8 +83,14 @@ function App() {
               onReject={rejectItem}
               onSelectAlt={pickAlternative}
               onOverride={overrideItem}
+              onSelectImage={selectImage}
+              onSelectAltImage={selectAltImage}
+              onApproveMultiple={approveMultipleAlternatives}
               onRefresh={refreshItems}
               onResumePolling={resumePollingIfNeeded}
+              onStop={stopProcessing}
+              onResume={resumeProcessing}
+              onRetryItem={retryFailedItem}
               processing={processing}
               progress={progress}
             />

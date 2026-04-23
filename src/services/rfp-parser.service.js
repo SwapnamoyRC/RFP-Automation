@@ -7,21 +7,29 @@ class RFPParserService {
    * Handles multiple formats automatically by detecting header patterns.
    * @param {Buffer} fileBuffer - The Excel file buffer
    * @param {string} fileName - Original file name (for logging)
-   * @returns {{ items: Array, meta: Object }}
+   * @returns {{ items: Array, meta: Object, warnings: Array }}
    */
   parse(fileBuffer, fileName = 'unknown') {
     const wb = XLSX.read(fileBuffer, { type: 'buffer' });
     logger.info(`Parsing RFP file: ${fileName} (sheets: ${wb.SheetNames.join(', ')})`);
 
     const allItems = [];
+    const warnings = [];
 
     for (const sheetName of wb.SheetNames) {
       const sheet = wb.Sheets[sheetName];
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-      const { headerRow, format } = this._detectFormat(rows);
+      const { headerRow, format, issues } = this._detectFormat(rows);
       if (headerRow === -1) {
-        logger.warn(`Sheet "${sheetName}": could not detect header row, skipping`);
+        const msg = `Sheet "${sheetName}": Could not detect Excel format. Please ensure your file has required columns: Serial Number, Description/Product Name, and Quantity.`;
+        logger.warn(msg);
+        warnings.push({
+          sheet: sheetName,
+          severity: 'error',
+          message: msg,
+          issues: issues || []
+        });
         continue;
       }
 
@@ -38,15 +46,18 @@ class RFPParserService {
         fileName,
         sheetsProcessed: wb.SheetNames,
         totalItems: allItems.length
-      }
+      },
+      warnings
     };
   }
 
   /**
    * Detect the header row and format type by scanning for known patterns.
+   * Also detects common issues like missing Qty column.
    */
   _detectFormat(rows) {
     logger.info(`[format-detect] Scanning ${Math.min(25, rows.length)} rows for header pattern`);
+    const issues = [];
 
     for (let i = 0; i < Math.min(25, rows.length); i++) {
       const row = rows[i];
@@ -69,52 +80,90 @@ class RFPParserService {
       // Helper: does this row have a qty header?
       const hasQtyHeader = joined.includes('qty') || joined.includes('quantity');
 
+      // Check for common issues
+      if (hasSnoHeader && hasDescHeader && !hasQtyHeader) {
+        issues.push('Missing "Qty" or "Quantity" column - this is required');
+        logger.info(`[format-detect] Issue: Missing Qty column at row ${i}`);
+      }
+
+      // Check for gap between header and data
+      if ((hasSnoHeader || hasDescHeader) && i < rows.length - 1) {
+        const nextDataRow = i + 1;
+        if (rows[nextDataRow]) {
+          const nextRowNonEmpty = rows[nextDataRow].filter(c => String(c || '').trim().length > 0).length;
+          if (nextRowNonEmpty < 2 && i < rows.length - 3) {
+            // Check if there are empty rows between header and data
+            const gapSize = this._countEmptyRowsAfter(rows, i);
+            if (gapSize > 0) {
+              issues.push(`Found ${gapSize} empty row(s) between header (row ${i + 1}) and data - remove these empty rows`);
+            }
+          }
+        }
+      }
+
       // Format A: "s no|description|...|qty|rate|amount" (like 1 RFP.xlsx)
       if (hasSnoHeader && hasDescHeader && hasQtyHeader) {
         // Check if there's a second Description column (Format B — 2 RFP.xlsx)
         const descCount = row.filter(c => String(c || '').toLowerCase().trim() === 'description').length;
         if (descCount >= 2 || joined.includes('location')) {
-          return { headerRow: i, format: 'B' };
+          return { headerRow: i, format: 'B', issues: [] };
         }
 
         // Check if it's a BOQ/Format D style (has "item description" or "item" + multi-row data)
         if (joined.includes('item description')) {
           logger.info(`[format-detect] ✓ Matched Format D at row ${i}`);
-          return { headerRow: i, format: 'D' };
+          return { headerRow: i, format: 'D', issues: [] };
         }
 
-        return { headerRow: i, format: 'A' };
+        return { headerRow: i, format: 'A', issues: [] };
       }
 
       // Format C: "sr.no|location|product name|qty|price|total" (like 3 RFP.xlsx)
       if (joined.includes('sr.no') && joined.includes('product name')) {
-        return { headerRow: i, format: 'C' };
+        return { headerRow: i, format: 'C', issues: [] };
       }
 
       // Format D: "sl.no|item description|ref image|...|total quantity" (like RFP 5.xlsx — BOQ format)
       if (hasSnoHeader && joined.includes('item description')) {
         logger.info(`[format-detect] ✓ Matched Format D at row ${i}`);
-        return { headerRow: i, format: 'D' };
+        return { headerRow: i, format: 'D', issues: [] };
       }
 
       // Format E: "nos|item|specification|unit|...|qty" (like RFP 7.xlsx — multi-row format)
       if ((joined.includes('nos') || joined.includes('no.')) && joined.includes('item') && joined.includes('specification')) {
-        return { headerRow: i, format: 'E' };
+        return { headerRow: i, format: 'E', issues: [] };
       }
 
       // Format F: "location|specifications|proposed image|quantity" (like RFP 6.xlsx)
       // No serial number header — serial numbers are in the first data column
       if (joined.includes('specification') && joined.includes('quantity') && joined.includes('location')) {
-        return { headerRow: i, format: 'F' };
+        return { headerRow: i, format: 'F', issues: [] };
       }
 
       // Fallback: look for qty column with numeric data below
       if (hasQtyHeader && joined.includes('location')) {
-        return { headerRow: i, format: 'C' };
+        return { headerRow: i, format: 'C', issues: [] };
       }
     }
 
-    return { headerRow: -1, format: null };
+    return { headerRow: -1, format: null, issues };
+  }
+
+  /**
+   * Count consecutive empty rows after the given row index
+   */
+  _countEmptyRowsAfter(rows, startIdx) {
+    let count = 0;
+    for (let i = startIdx + 1; i < rows.length && i < startIdx + 5; i++) {
+      const row = rows[i];
+      const nonEmpty = row && row.filter(c => String(c || '').trim().length > 0).length;
+      if (!nonEmpty || nonEmpty === 0) {
+        count++;
+      } else {
+        break;
+      }
+    }
+    return count;
   }
 
   /**

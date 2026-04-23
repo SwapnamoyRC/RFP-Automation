@@ -5,6 +5,9 @@ const { matchFromBase64, matchFromText, initSigLIPModel } = require('../services
 const pptxGenerator = require('../services/pptx-generator.service');
 const logger = require('../config/logger');
 
+// In-memory set of sessions that have been requested to stop
+const stoppedSessions = new Set();
+
 /**
  * GET /api/sessions
  * List sessions for the authenticated user
@@ -98,6 +101,19 @@ async function processSession(req, res) {
     return res.status(400).json({ error: 'Failed to parse Excel', detail: err.message });
   }
 
+  // Check if parsing found warnings (format issues)
+  const warnings = parsed.warnings || [];
+  const hasParsingErrors = warnings.some(w => w.severity === 'error');
+
+  // If no items were found, it's an error condition
+  if (parsed.items.length === 0 && hasParsingErrors) {
+    await sessionService.updateSession(id, { status: 'error' });
+    return res.status(400).json({
+      error: 'No products found in Excel file',
+      details: warnings.map(w => ({ sheet: w.sheet, message: w.message, issues: w.issues })),
+    });
+  }
+
   // Accept threshold + image/text weight from request body
   const threshold = req.body.threshold
     ? Math.min(Math.max(parseFloat(req.body.threshold), 0.1), 0.95)
@@ -111,6 +127,7 @@ async function processSession(req, res) {
   await sessionService.updateSession(id, {
     status: 'processing',
     file_name: fileName,
+    file_base64: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64Clean}`,
     total_items: parsed.items.length,
     threshold,
     image_weight: imageWeight,
@@ -122,6 +139,7 @@ async function processSession(req, res) {
     status: 'processing',
     total_items: parsed.items.length,
     message: 'Processing started. Poll GET /api/sessions/:id/progress for updates.',
+    warnings: warnings.length > 0 ? warnings : undefined,
   });
 
   // ── Background processing (runs after response is sent) ──
@@ -153,7 +171,7 @@ async function processInBackground(sessionId, fileBuffer, parsed, threshold, ima
 
   const imageDataByRow = {};
   for (const img of extractedImages) {
-    if (img.base64) imageDataByRow[img.row] = { base64: img.base64, extension: img.extension };
+    if (img.base64) imageDataByRow[img.row - 1] = { base64: img.base64, extension: img.extension };
   }
 
   // Build image-to-item mapping (exact match + nearest unmatched fallback)
@@ -188,11 +206,19 @@ async function processInBackground(sessionId, fileBuffer, parsed, threshold, ima
 
   // Process items in parallel batches of CONCURRENCY
   for (let batchStart = 0; batchStart < parsed.items.length; batchStart += CONCURRENCY) {
+    // Check if stop was requested
+    if (stoppedSessions.has(sessionId)) {
+      logger.info(`[session-process] Session ${sessionId} stop requested — halting at batch ${batchStart + 1}`);
+      stoppedSessions.delete(sessionId);
+      await sessionService.updateSession(sessionId, { status: 'reviewing', completed_at: new Date() });
+      return;
+    }
+
     const batchEnd = Math.min(batchStart + CONCURRENCY, parsed.items.length);
     const batch = [];
 
     for (let i = batchStart; i < batchEnd; i++) {
-      batch.push(processOneItem(i, parsed.items[i], itemImageMap[i] || null, threshold, 2, imageWeight));
+      batch.push(processOneItem(i, parsed.items[i], itemImageMap[i] || null, threshold, 2, imageWeight, sessionId));
     }
 
     const batchResults = await Promise.all(batch);
@@ -210,9 +236,26 @@ async function processInBackground(sessionId, fileBuffer, parsed, threshold, ima
     logger.info(`[session-process] Session ${sessionId}: batch ${batchStart + 1}-${batchEnd} of ${parsed.items.length} done`);
 
     // Pause between items to let OpenAI rate limit window reset (200K TPM)
+    // Increased from 5s to 15s to ensure TPM window fully resets and prevent 429 errors
     if (batchEnd < parsed.items.length) {
-      await new Promise(r => setTimeout(r, 5000));
+      await new Promise(r => setTimeout(r, 15000));
+
+      // Check again if stop was requested during the delay
+      if (stoppedSessions.has(sessionId)) {
+        logger.info(`[session-process] Session ${sessionId} stop requested during delay — halting`);
+        stoppedSessions.delete(sessionId);
+        await sessionService.updateSession(sessionId, { status: 'reviewing', completed_at: new Date() });
+        return;
+      }
     }
+  }
+
+  // Check if stop was requested before retry pass
+  if (stoppedSessions.has(sessionId)) {
+    logger.info(`[session-process] Session ${sessionId} stop requested before retry pass — halting`);
+    stoppedSessions.delete(sessionId);
+    await sessionService.updateSession(sessionId, { status: 'reviewing', completed_at: new Date() });
+    return;
   }
 
   // Retry pass: re-process any items that failed (match_source = 'error')
@@ -223,8 +266,8 @@ async function processInBackground(sessionId, fileBuffer, parsed, threshold, ima
   );
 
   if (failedItems.rows.length > 0) {
-    logger.info(`[session-process] Session ${sessionId}: retrying ${failedItems.rows.length} failed items after 10s cooldown`);
-    await new Promise(r => setTimeout(r, 10000)); // 10s cooldown for rate limits to reset
+    logger.info(`[session-process] Session ${sessionId}: retrying ${failedItems.rows.length} failed items after 30s cooldown`);
+    await new Promise(r => setTimeout(r, 30000)); // 30s cooldown for rate limits to fully reset (TPM window)
 
     for (const row of failedItems.rows) {
       const idx = row.item_index;
@@ -232,7 +275,7 @@ async function processInBackground(sessionId, fileBuffer, parsed, threshold, ima
       if (!item) continue;
 
       logger.info(`[session-process] Retrying item ${idx}: "${item.query}"`);
-      const result = await processOneItem(idx, item, itemImageMap[idx] || null, threshold, 2, imageWeight);
+      const result = await processOneItem(idx, item, itemImageMap[idx] || null, threshold, 2, imageWeight, sessionId);
 
       // Only update if retry succeeded (not another error)
       if (result.match_source !== 'error') {
@@ -243,8 +286,8 @@ async function processInBackground(sessionId, fileBuffer, parsed, threshold, ima
         logger.warn(`[session-process] Retry failed again for item ${idx}: "${item.query}"`);
       }
 
-      // Small delay between retries
-      await new Promise(r => setTimeout(r, 3000));
+      // Increased delay between retries (from 3s to 8s) to ensure TPM resets
+      await new Promise(r => setTimeout(r, 8000));
     }
   }
 
@@ -265,7 +308,7 @@ async function processInBackground(sessionId, fileBuffer, parsed, threshold, ima
 /**
  * Process a single RFP item through the matcher pipeline.
  */
-async function processOneItem(index, item, rfpImageData, threshold, retries = 2, imageWeight = 0.7) {
+async function processOneItem(index, item, rfpImageData, threshold, retries = 2, imageWeight = 0.7, sessionId = null) {
   logger.info(`[session-process] Item ${index + 1}: "${item.query}" (image: ${rfpImageData ? 'yes' : 'no'})`);
 
   try {
@@ -287,9 +330,15 @@ async function processOneItem(index, item, rfpImageData, threshold, retries = 2,
       product_name: m.product.name,
       product_brand: m.product.brand_name || null,
       product_image_url: m.product.best_match_image_url || m.product.image_url,
+      product_url: m.product.source_url || null,
       similarity: Math.min(m.score / 10, 0.99),
       match_source: 'hybrid_pipeline',
       explanation: m.explanation || null,
+      specs: {
+        materials: m.product.materials || null,
+        dimensions: m.product.dimensions || null,
+        category: m.product.category || null,
+      },
     }));
 
     let rfpImageBase64 = null;
@@ -317,6 +366,7 @@ async function processOneItem(index, item, rfpImageData, threshold, retries = 2,
         name: topMatch.product.name,
         brand: topMatch.product.brand_name || null,
         image_url: topMatch.product.best_match_image_url || topMatch.product.image_url,
+        source_url: topMatch.product.source_url || null,
         specs: {
           materials: topMatch.product.materials,
           dimensions: topMatch.product.dimensions,
@@ -330,13 +380,42 @@ async function processOneItem(index, item, rfpImageData, threshold, retries = 2,
     // Retry on rate limit errors (429)
     const isRateLimit = err.status === 429 || err.message?.includes('429') || err.message?.includes('Rate limit');
     if (isRateLimit && retries > 0) {
-      const waitSec = retries === 2 ? 15 : 30; // 15s first retry, 30s second
-      logger.warn(`[session-process] Item ${index} rate limited, retrying in ${waitSec}s (${retries} retries left)`);
-      await new Promise(r => setTimeout(r, waitSec * 1000));
-      return processOneItem(index, item, rfpImageData, threshold, retries - 1, imageWeight);
+      const waitSec = retries === 2 ? 45 : 90; // 45s first retry, 90s second (ensures full TPM window reset)
+      logger.warn(`[session-process] Item ${index + 1} rate limited, retrying in ${waitSec}s (${retries} retries left)`);
+
+      // Wait with periodic stop flag checks (every 5 seconds)
+      const waitMs = waitSec * 1000;
+      const checkInterval = 5000;
+      let elapsed = 0;
+      while (elapsed < waitMs) {
+        // Check if stop was requested during wait
+        if (sessionId && stoppedSessions.has(sessionId)) {
+          logger.info(`[session-process] Stop requested during retry wait for item ${index + 1}`);
+          return {
+            rfp_line: item.rfp_line,
+            query: item.query,
+            description: item.description,
+            quantity: item.quantity,
+            location: item.location,
+            image_description: null,
+            match_source: 'error',
+            confidence: 0,
+            matched: false,
+            product: null,
+            alternatives: [],
+            rfp_image_base64: null,
+          };
+        }
+
+        const nextCheck = Math.min(checkInterval, waitMs - elapsed);
+        await new Promise(r => setTimeout(r, nextCheck));
+        elapsed += nextCheck;
+      }
+
+      return processOneItem(index, item, rfpImageData, threshold, retries - 1, imageWeight, sessionId);
     }
 
-    logger.error(`[session-process] Item ${index} pipeline failed: ${err.message}`);
+    logger.error(`[session-process] Item ${index + 1} pipeline failed: ${err.message}`);
     return {
       rfp_line: item.rfp_line,
       query: item.query,
@@ -376,10 +455,10 @@ async function getProgress(req, res) {
  */
 async function overrideItem(req, res) {
   const { id, itemId } = req.params;
-  const { productUrl, productName, productBrand, productImageUrl, note } = req.body;
+  const { productUrl, productName, productBrand, category, description, dimensions, materials, productImageUrl, note } = req.body;
 
   logger.info(`[override-controller] Request body:`, JSON.stringify(req.body));
-  logger.info(`[override-controller] Extracted: url=${productUrl ? 'yes' : 'no'}, name=${productName ? 'yes' : 'no'}, brand=${productBrand ? 'yes' : 'no'}, imageUrl=${productImageUrl ? 'yes' : 'no'}, note=${note ? 'yes' : 'no'}`);
+  logger.info(`[override-controller] Extracted: url=${productUrl ? 'yes' : 'no'}, name=${productName ? 'yes' : 'no'}, brand=${productBrand ? 'yes' : 'no'}, category=${category ? 'yes' : 'no'}, description=${description ? 'yes' : 'no'}, dimensions=${dimensions ? 'yes' : 'no'}, materials=${materials ? 'yes' : 'no'}, imageUrl=${productImageUrl ? 'yes' : 'no'}, note=${note ? 'yes' : 'no'}`);
 
   const { pool: db } = require('../config/database');
 
@@ -412,7 +491,13 @@ async function overrideItem(req, res) {
         productName,
         productBrand,
         productUrl,
-        productImageUrl || null
+        productImageUrl || null,
+        {
+          category: category || null,
+          description: description || null,
+          dimensions: dimensions || null,
+          materials: materials || null,
+        }
       );
       if (productId) {
         logger.info(`[override] ✅ Product successfully saved: id=${productId}, session=${id}, item=${itemId}`);
@@ -438,6 +523,145 @@ async function overrideItem(req, res) {
     override_product_image_url: productImageUrl || null,
     ...counts,
   });
+}
+
+/**
+ * GET /api/sessions/:id/items/:itemId/product-images
+ * Returns all available images for the matched product (from product_images table)
+ */
+async function getProductImages(req, res) {
+  const { id, itemId } = req.params;
+  const { pool: db } = require('../config/database');
+
+  // Get product name + brand from session item
+  const itemResult = await db.query(
+    `SELECT product_name, product_brand, product_image_url, override_product_image_url, alternatives
+     FROM rfp_session_items WHERE id = $1 AND session_id = $2`,
+    [itemId, id]
+  );
+  if (!itemResult.rows[0]) return res.status(404).json({ error: 'Item not found' });
+
+  const { product_name, product_brand, product_image_url, override_product_image_url } = itemResult.rows[0];
+
+  // Allow caller to override which product to look up (used for alternatives)
+  const lookupName = req.query.name || product_name;
+  const lookupBrand = req.query.brand || product_brand;
+
+  // Query product_images (NaughtOne via product_families/variants) — fuzzy name match
+  const imgResult = await db.query(
+    `SELECT DISTINCT pi.image_url
+     FROM product_images pi
+     WHERE (
+       pi.family_id IN (
+         SELECT pf.id FROM product_families pf
+         JOIN brands b ON pf.brand_id = b.id
+         WHERE LOWER(b.name) ILIKE LOWER($2)
+           AND (
+             LOWER($1) ILIKE LOWER(pf.name) || ' %' OR LOWER($1) = LOWER(pf.name)
+             OR LOWER(pf.name) ILIKE LOWER($1) || ' %' OR LOWER(pf.name) = LOWER($1)
+           )
+       )
+       OR pi.variant_id IN (
+         SELECT pv.id FROM product_variants_v2 pv
+         JOIN brands b ON pv.brand_id = b.id
+         WHERE LOWER(b.name) ILIKE LOWER($2)
+           AND (
+             LOWER($1) ILIKE LOWER(pv.name) || ' %' OR LOWER($1) = LOWER(pv.name)
+             OR LOWER(pv.name) ILIKE LOWER($1) || ' %' OR LOWER(pv.name) = LOWER($1)
+           )
+       )
+     )
+     LIMIT 30`,
+    [lookupName, lookupBrand]
+  );
+
+  // Query product_siglip_images (HAY, Muuto, Herman Miller, etc.) — direct product_id join
+  const siglipResult = await db.query(
+    `SELECT DISTINCT psi.image_url
+     FROM product_siglip_images psi
+     JOIN products p ON psi.product_id = p.id
+     JOIN brands b ON p.brand_id = b.id
+     WHERE LOWER(p.name) = LOWER($1) AND LOWER(b.name) ILIKE LOWER($2)
+     LIMIT 30`,
+    [lookupName, lookupBrand]
+  );
+
+  let images = [
+    ...imgResult.rows.map(r => r.image_url),
+    ...siglipResult.rows.map(r => r.image_url),
+  ].filter(Boolean);
+
+  // Prepend the primary product image_url if not already in list
+  if (product_image_url && !images.includes(product_image_url)) {
+    images = [product_image_url, ...images];
+  }
+
+  // For alternative lookups, report the alt's own selected_image_url if present
+  const altIndex = req.query.altIndex ? parseInt(req.query.altIndex) : null;
+  let selectedImageUrl = override_product_image_url || product_image_url || null;
+  if (altIndex !== null) {
+    const alts = typeof itemResult.rows[0].alternatives === 'string'
+      ? JSON.parse(itemResult.rows[0].alternatives || '[]')
+      : (itemResult.rows[0].alternatives || []);
+    const alt = alts[altIndex - 1];
+    selectedImageUrl = alt?.selected_image_url || alt?.product_image_url || null;
+  }
+
+  res.json({ images, selected_image_url: selectedImageUrl });
+}
+
+/**
+ * PATCH /api/sessions/:id/items/:itemId/select-image
+ * Save a chosen product image for PPT without triggering full override
+ * Body: { imageUrl }
+ */
+async function selectProductImage(req, res) {
+  const { id, itemId } = req.params;
+  const { imageUrl } = req.body;
+  if (!imageUrl) return res.status(400).json({ error: 'imageUrl is required' });
+
+  const { pool: db } = require('../config/database');
+  await db.query(
+    `UPDATE rfp_session_items SET override_product_image_url = $1 WHERE id = $2 AND session_id = $3`,
+    [imageUrl, itemId, id]
+  );
+
+  res.json({ item_id: itemId, selected_image_url: imageUrl });
+}
+
+/**
+ * PATCH /api/sessions/:id/items/:itemId/alternatives/:altIndex/select-image
+ * Save a chosen image for a specific approved alternative (stored inside the alternatives JSONB)
+ * Body: { imageUrl }
+ */
+async function selectAlternativeImage(req, res) {
+  const { id, itemId, altIndex } = req.params;
+  const { imageUrl } = req.body;
+  if (!imageUrl) return res.status(400).json({ error: 'imageUrl is required' });
+
+  const idx = parseInt(altIndex); // 1-based
+  if (isNaN(idx) || idx < 1) return res.status(400).json({ error: 'Invalid altIndex' });
+
+  const { pool: db } = require('../config/database');
+  const result = await db.query(
+    `SELECT alternatives FROM rfp_session_items WHERE id = $1 AND session_id = $2`,
+    [itemId, id]
+  );
+  if (!result.rows[0]) return res.status(404).json({ error: 'Item not found' });
+
+  const alts = typeof result.rows[0].alternatives === 'string'
+    ? JSON.parse(result.rows[0].alternatives || '[]')
+    : (result.rows[0].alternatives || []);
+
+  if (!alts[idx - 1]) return res.status(400).json({ error: 'Alternative not found at that index' });
+  alts[idx - 1].selected_image_url = imageUrl;
+
+  await db.query(
+    `UPDATE rfp_session_items SET alternatives = $1 WHERE id = $2 AND session_id = $3`,
+    [JSON.stringify(alts), itemId, id]
+  );
+
+  res.json({ item_id: itemId, alt_index: idx, selected_image_url: imageUrl });
 }
 
 /**
@@ -502,24 +726,94 @@ async function generateFromSession(req, res) {
     return res.status(400).json({ error: 'No approved items to generate PPT from' });
   }
 
-  // Build slides array — simplified (no AI recommendation paragraph)
+  // Bulk-lookup source_url AND specs from products table for all products
+  const { pool } = require('../config/database');
+  const productLookupMap = {};
+  const allProductPairs = new Set();
+  for (const item of approvedItems) {
+    for (const product of (item.products || [])) {
+      if (product.product_name && product.product_brand) {
+        allProductPairs.add(`${product.product_name}|||${product.product_brand}`);
+      }
+    }
+  }
+  for (const pair of allProductPairs) {
+    const [name, brand] = pair.split('|||');
+    const { rows } = await pool.query(
+      `SELECT p.source_url, p.materials, p.dimensions, p.category, p.description,
+              p.designer, p.name, b.name AS brand_name
+       FROM products p
+       JOIN brands b ON p.brand_id = b.id
+       WHERE LOWER(p.name) = LOWER($1) AND LOWER(b.name) = LOWER($2)
+       LIMIT 1`,
+      [name, brand]
+    );
+    if (rows[0]) productLookupMap[pair] = rows[0];
+  }
+
+  // Returns false for raw scraped tabular data (e.g. "MATERIAL | 63.13\n...")
+  const isCleanSpecValue = (val) => {
+    const s = String(val).trim();
+    if (!s) return false;
+    // Reject values that look like percentage/material tables (pipe + number)
+    if (/\|\s*\d+\.?\d*/.test(s)) return false;
+    if (s.includes('\n') && s.includes('|')) return false;
+    return true;
+  };
+
+  // Build slides array — each item has multiple approved products
   const slides = approvedItems.map(item => {
-    const specs = Object.entries(item.product_specs || {})
-      .filter(([, v]) => v)
+    // Process all products for this item
+    const products = (item.products || []).map(product => {
+      const lookupKey = `${product.product_name}|||${product.product_brand}`;
+      const dbProduct = productLookupMap[lookupKey] || {};
+      const sourceUrl = product.product_url || dbProduct.source_url || null;
+
+      // Build specs: prefer stored product_specs, fall back to DB fields
+      let specs = Object.entries(product.product_specs || {})
+        .filter(([, v]) => v && isCleanSpecValue(v))
+        .map(([k, v]) => `${k.charAt(0).toUpperCase() + k.slice(1)}: ${String(v).trim()}`);
+
+      if (specs.length === 0 && dbProduct) {
+        if (dbProduct.materials && isCleanSpecValue(dbProduct.materials)) specs.push(`Materials: ${dbProduct.materials}`);
+        if (dbProduct.dimensions && isCleanSpecValue(dbProduct.dimensions)) specs.push(`Dimensions: ${dbProduct.dimensions}`);
+        if (dbProduct.category) specs.push(`Category: ${dbProduct.category}`);
+        if (dbProduct.description) specs.push(`Description: ${dbProduct.description}`);
+      }
+
+      // Full clean DB details for slide notes (all fields, tabular data filtered)
+      const dbDetails = {};
+      if (dbProduct.category) dbDetails.category = dbProduct.category;
+      if (dbProduct.materials && isCleanSpecValue(dbProduct.materials)) dbDetails.materials = dbProduct.materials;
+      if (dbProduct.dimensions) dbDetails.dimensions = dbProduct.dimensions;
+      if (dbProduct.designer) dbDetails.designer = dbProduct.designer;
+      if (dbProduct.description) dbDetails.description = dbProduct.description;
+
+      return {
+        product_name: product.product_name,
+        brand: product.product_brand,
+        confidence: product.confidence,
+        image_url: product.product_image_url,
+        source_url: sourceUrl,
+        specs,
+        dbDetails,
+      };
+    });
+
+    // Build key specs from primary product specs
+    const primarySpecs = Object.entries(item.primary_specs || {})
+      .filter(([, v]) => v && isCleanSpecValue(v))
       .map(([k, v]) => `${k.charAt(0).toUpperCase() + k.slice(1)}: ${String(v).trim()}`);
 
     return {
       slide_title: item.query,
       rfp_description: item.description || item.query,
-      product_name: item.product_name,
-      brand: item.product_brand,
-      confidence: item.confidence,
       quantity: item.quantity,
       location: item.location,
-      specs,
-      image_url: item.product_image_url,
       rfp_image_url: item.rfp_image_base64,
       is_overridden: item.is_overridden || false,
+      key_specs: primarySpecs,
+      products,
     };
   });
 
@@ -571,7 +865,8 @@ async function selectAlternative(req, res) {
     return res.status(400).json({ error: 'Alternative not found at that index' });
   }
 
-  // Update the item's primary match to the selected alternative
+  // Update the item's primary match to the selected alternative.
+  // Clear override_product_image_url so the old picked image doesn't carry over to the new product.
   await db.query(
     `UPDATE rfp_session_items SET
       product_name = $1,
@@ -580,7 +875,8 @@ async function selectAlternative(req, res) {
       confidence = $4,
       match_source = $5,
       match_explanation = $6,
-      selected_alternative = $7
+      selected_alternative = $7,
+      override_product_image_url = NULL
     WHERE id = $8 AND session_id = $9`,
     [
       selected.product_name,
@@ -604,6 +900,345 @@ async function selectAlternative(req, res) {
   });
 }
 
+/**
+ * POST /api/sessions/:id/items/:itemId/approve-alternatives
+ * Approve multiple alternatives for an RFP item (all will be included in PPT)
+ * Body: { alternativeIndices: [1, 2, 3] } (1-based indices)
+ */
+async function approveMultipleAlternatives(req, res) {
+  const { id, itemId } = req.params;
+  const { alternativeIndices } = req.body;
+
+  if (!Array.isArray(alternativeIndices) || alternativeIndices.length === 0) {
+    return res.status(400).json({ error: 'alternativeIndices must be a non-empty array' });
+  }
+
+  const { pool: db } = require('../config/database');
+
+  // Get the item and its alternatives
+  const itemResult = await db.query(
+    `SELECT * FROM rfp_session_items WHERE id = $1 AND session_id = $2`,
+    [itemId, id]
+  );
+  if (!itemResult.rows[0]) {
+    return res.status(404).json({ error: 'Item not found' });
+  }
+
+  const item = itemResult.rows[0];
+  const alternatives = typeof item.alternatives === 'string'
+    ? JSON.parse(item.alternatives || '[]')
+    : (item.alternatives || []);
+
+  // Validate all indices exist
+  for (const idx of alternativeIndices) {
+    if (!alternatives[idx - 1]) {
+      return res.status(400).json({ error: `Alternative not found at index ${idx}` });
+    }
+  }
+
+  // Store approved alternative indices (1-based)
+  await db.query(
+    `UPDATE rfp_session_items
+     SET approved_alternative_indices = $1, review_status = 'approved'
+     WHERE id = $2 AND session_id = $3`,
+    [JSON.stringify(alternativeIndices), itemId, id]
+  );
+
+  // Return approved items
+  const approved = alternativeIndices.map(idx => alternatives[idx - 1]);
+
+  res.json({
+    item_id: itemId,
+    approved_count: alternativeIndices.length,
+    approved_alternatives: approved,
+    approved_indices: alternativeIndices
+  });
+}
+
+/**
+ * POST /api/sessions/:id/stop
+ * Stop the background processing for a session
+ */
+async function stopSession(req, res) {
+  const { id } = req.params;
+
+  // Add to stopped set so background loop will check and exit
+  stoppedSessions.add(id);
+
+  // Update session status to reviewing (processing will stop)
+  await sessionService.updateSession(id, { status: 'reviewing' });
+
+  logger.info(`[stop] Stop requested for session ${id}`);
+  res.json({ stopped: true, sessionId: id });
+}
+
+/**
+ * POST /api/sessions/:id/items/:itemId/retry
+ * Retry processing a single failed item
+ */
+async function retryItem(req, res) {
+  const { id, itemId } = req.params;
+
+  // Verify item exists and actually failed
+  const { pool } = require('../config/database');
+  const itemResult = await pool.query(
+    `SELECT item_index FROM rfp_session_items WHERE id = $1 AND session_id = $2 AND match_source = 'error'`,
+    [itemId, id]
+  );
+
+  if (!itemResult.rows[0]) {
+    return res.status(400).json({ error: 'Item not found or not failed' });
+  }
+
+  const itemIndex = itemResult.rows[0].item_index;
+  const session = await sessionService.getSession(id);
+
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  const threshold = session.threshold || 7;
+  const imageWeight = session.image_weight || 0.7;
+
+  try {
+    // Re-parse the Excel to rebuild item data and image
+    // file_base64 is stored as data URI or raw base64
+    let fileBase64 = session.file_base64;
+    if (fileBase64.startsWith('data:')) {
+      // Strip data URI prefix if present
+      fileBase64 = fileBase64.split(',')[1];
+    }
+    const fileBuffer = Buffer.from(fileBase64, 'base64');
+    const parsed = await rfpParserService.parse(fileBuffer, 'session.xlsx');
+
+    if (!parsed.items[itemIndex]) {
+      return res.status(400).json({ error: 'Item index not found in parsed data' });
+    }
+
+    const itemData = parsed.items[itemIndex];
+
+    // Extract images from the Excel file
+    let rfpImageData = null;
+    try {
+      const extractedImages = await visionService.extractImagesFromExcel(fileBuffer);
+      for (const img of extractedImages) {
+        if (img.row - 1 === itemData._dataRow && img.base64) {
+          rfpImageData = { base64: img.base64, extension: img.extension };
+          break;
+        }
+      }
+    } catch (imgErr) {
+      logger.warn(`[retry] Image extraction failed for item ${itemIndex}: ${imgErr.message}`);
+    }
+
+    // Pre-load SigLIP model if not already loaded
+    await initSigLIPModel();
+
+    // Re-process the item
+    const result = await processOneItem(itemIndex, itemData, rfpImageData, threshold, 2, imageWeight, id);
+
+    // Delete old failed entry and save new result
+    await pool.query(
+      `DELETE FROM rfp_session_items WHERE session_id = $1 AND item_index = $2`,
+      [id, itemIndex]
+    );
+    await sessionService.saveSessionItem(id, itemIndex, result);
+
+    logger.info(`[retry] Retry succeeded for session ${id}, item ${itemIndex}`);
+    res.json({ success: true, itemId, processed: true });
+  } catch (err) {
+    logger.error(`[retry] Retry failed for session ${id}, item ${itemIndex}: ${err.message}`);
+    res.status(500).json({ error: 'Retry processing failed', details: err.message });
+  }
+}
+
+/**
+ * POST /api/sessions/:id/resume
+ * Resume processing for unprocessed items in a stopped session
+ */
+async function resumeSession(req, res) {
+  const { id } = req.params;
+  const { pool } = require('../config/database');
+
+  // Get session
+  const session = await sessionService.getSession(id);
+  if (!session) {
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  // Can only resume if session is in 'reviewing' status (was stopped)
+  if (session.status !== 'reviewing') {
+    return res.status(400).json({ error: 'Can only resume stopped sessions (status: reviewing)' });
+  }
+
+  // Check if there are unprocessed items
+  const processedCount = await pool.query(
+    `SELECT COUNT(*)::int as count FROM rfp_session_items WHERE session_id = $1`,
+    [id]
+  );
+  const processed = processedCount.rows[0].count;
+  const total = session.total_items || 0;
+
+  if (processed >= total) {
+    return res.status(400).json({ error: 'All items already processed' });
+  }
+
+  try {
+    // Clear the stop flag in case this session was previously stopped
+    stoppedSessions.delete(id);
+
+    // Re-parse Excel and extract images
+    let fileBase64 = session.file_base64;
+    if (fileBase64.startsWith('data:')) {
+      fileBase64 = fileBase64.split(',')[1];
+    }
+    const fileBuffer = Buffer.from(fileBase64, 'base64');
+    const parsed = await rfpParserService.parse(fileBuffer, 'session.xlsx');
+
+    logger.info(`[resume] Session ${id}: parsed ${parsed.items.length} items, ${processed} already processed`);
+
+    // Extract images
+    let extractedImages = [];
+    try {
+      extractedImages = await visionService.extractImagesFromExcel(fileBuffer);
+    } catch (err) {
+      logger.error(`[resume] Image extraction failed: ${err.message}`);
+    }
+
+    const imageDataByRow = {};
+    for (const img of extractedImages) {
+      if (img.base64) imageDataByRow[img.row - 1] = { base64: img.base64, extension: img.extension };
+    }
+
+    // Build image-to-item mapping
+    const itemImageMap = {};
+    for (let i = 0; i < parsed.items.length; i++) {
+      if (imageDataByRow[parsed.items[i]._dataRow]) {
+        itemImageMap[i] = imageDataByRow[parsed.items[i]._dataRow];
+      }
+    }
+
+    // Find which item indices are already processed
+    const existingIndices = await pool.query(
+      `SELECT item_index FROM rfp_session_items WHERE session_id = $1`,
+      [id]
+    );
+    const processedIndices = new Set(existingIndices.rows.map(r => r.item_index));
+
+    // Identify unprocessed items
+    const unprocessedIndices = [];
+    for (let i = 0; i < parsed.items.length; i++) {
+      if (!processedIndices.has(i)) {
+        unprocessedIndices.push(i);
+      }
+    }
+
+    if (unprocessedIndices.length === 0) {
+      return res.status(400).json({ error: 'No unprocessed items to resume' });
+    }
+
+    logger.info(`[resume] Session ${id}: resuming with ${unprocessedIndices.length} unprocessed items`);
+
+    // Update session status back to processing
+    await sessionService.updateSession(id, { status: 'processing' });
+
+    // Fire background processing for unprocessed items only
+    resumeProcessingInBackground(
+      id,
+      parsed,
+      itemImageMap,
+      unprocessedIndices,
+      session.threshold || 7,
+      session.image_weight || 0.7
+    ).catch(err => {
+      logger.error(`[resume] Background processing error: ${err.message}`);
+      sessionService.updateSession(id, { status: 'reviewing', completed_at: new Date() }).catch(() => {});
+    });
+
+    res.json({ resumed: true, sessionId: id, unprocessedCount: unprocessedIndices.length });
+  } catch (err) {
+    logger.error(`[resume] Resume failed for session ${id}: ${err.message}`);
+    res.status(500).json({ error: 'Resume processing failed', details: err.message });
+  }
+}
+
+/**
+ * Background processor for resumed items (processes only unprocessed item indices)
+ */
+async function resumeProcessingInBackground(sessionId, parsed, itemImageMap, unprocessedIndices, threshold, imageWeight = 0.7) {
+  const CONCURRENCY = 1;
+
+  // Pre-load SigLIP model once
+  await initSigLIPModel();
+
+  // Process unprocessed items in batches
+  for (let batchIdx = 0; batchIdx < unprocessedIndices.length; batchIdx += CONCURRENCY) {
+    // Check if stop was requested
+    if (stoppedSessions.has(sessionId)) {
+      logger.info(`[resume-process] Session ${sessionId} stop requested — halting at item ${batchIdx}`);
+      stoppedSessions.delete(sessionId);
+      await sessionService.updateSession(sessionId, { status: 'reviewing', completed_at: new Date() });
+      return;
+    }
+
+    const batchEnd = Math.min(batchIdx + CONCURRENCY, unprocessedIndices.length);
+    const batch = [];
+
+    for (let i = batchIdx; i < batchEnd; i++) {
+      const itemIndex = unprocessedIndices[i];
+      batch.push(processOneItem(itemIndex, parsed.items[itemIndex], itemImageMap[itemIndex] || null, threshold, 2, imageWeight, sessionId));
+    }
+
+    const batchResults = await Promise.all(batch);
+
+    // Check if stop was requested during item processing
+    if (stoppedSessions.has(sessionId)) {
+      logger.info(`[resume-process] Session ${sessionId} stop requested after batch processing — halting`);
+      stoppedSessions.delete(sessionId);
+      await sessionService.updateSession(sessionId, { status: 'reviewing', completed_at: new Date() });
+      return;
+    }
+
+    // Save each completed item to DB
+    for (let j = 0; j < batchResults.length; j++) {
+      const itemIndex = unprocessedIndices[batchIdx + j];
+      try {
+        await sessionService.saveSessionItem(sessionId, itemIndex, batchResults[j]);
+      } catch (err) {
+        logger.error(`[resume-process] Failed to save item ${itemIndex}: ${err.message}`);
+      }
+    }
+
+    logger.info(`[resume-process] Session ${sessionId}: processed items ${batchIdx + 1}-${batchEnd} of ${unprocessedIndices.length}`);
+
+    // Pause between batches
+    if (batchEnd < unprocessedIndices.length) {
+      await new Promise(r => setTimeout(r, 15000));
+
+      // Check again if stop was requested during the delay
+      if (stoppedSessions.has(sessionId)) {
+        logger.info(`[resume-process] Session ${sessionId} stop requested during delay — halting`);
+        stoppedSessions.delete(sessionId);
+        await sessionService.updateSession(sessionId, { status: 'reviewing', completed_at: new Date() });
+        return;
+      }
+    }
+  }
+
+  // Mark session as ready for review
+  const completedAt = new Date();
+  const sessionRow = await sessionService.getSession(sessionId);
+  const startedAt = sessionRow?.started_at ? new Date(sessionRow.started_at) : null;
+  const processingTimeMs = startedAt ? completedAt - startedAt : null;
+
+  await sessionService.updateSession(sessionId, {
+    status: 'reviewing',
+    completed_at: completedAt,
+    ...(processingTimeMs !== null && { processing_time_ms: processingTimeMs }),
+  });
+  logger.info(`[resume-process] Session ${sessionId}: resumed processing complete (${unprocessedIndices.length} items)`);
+}
+
 module.exports = {
   listSessions,
   createSession,
@@ -616,6 +1251,13 @@ module.exports = {
   getNextPendingItem,
   reviewItem,
   selectAlternative,
+  approveMultipleAlternatives,
   generateFromSession,
   overrideItem,
+  getProductImages,
+  selectProductImage,
+  selectAlternativeImage,
+  stopSession,
+  retryItem,
+  resumeSession,
 };

@@ -108,14 +108,15 @@ class SessionService {
       `INSERT INTO rfp_session_items
        (session_id, item_index, rfp_line, query, description, quantity, location,
         image_description, match_source, confidence, product_name, product_brand,
-        product_image_url, product_specs, rfp_image_base64, alternatives, match_explanation,
+        product_image_url, product_source_url, product_specs, rfp_image_base64, alternatives, match_explanation,
         matched_points, mismatched_points)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
       [
         sessionId, itemIndex, item.rfp_line, item.query, item.description,
         item.quantity, item.location, item.image_description, item.match_source,
         item.confidence, item.product?.name, item.product?.brand,
         item.product?.image_url || item.product?.images?.[0]?.url || null,
+        item.product?.source_url || null,
         JSON.stringify(item.product?.specs || {}),
         item.rfp_image_base64 || null,
         JSON.stringify(item.alternatives || []),
@@ -207,38 +208,103 @@ class SessionService {
 
   /**
    * Get approved items formatted for PPT generation
+   * Groups approved alternatives together per RFP item (one slide = one item with multiple products)
    */
   async getApprovedItemsForPPT(sessionId) {
     const result = await pool.query(
       `SELECT * FROM rfp_session_items WHERE session_id = $1 AND review_status = 'approved' ORDER BY item_index`,
       [sessionId]
     );
-    return result.rows.map(item => ({
-      rfp_line: item.rfp_line,
-      query: item.query,
-      description: item.description,
-      quantity: item.quantity,
-      location: item.location,
-      confidence: item.confidence,
-      match_source: item.match_source,
-      product_name: item.is_overridden ? (item.override_product_name || item.product_name) : item.product_name,
-      product_brand: item.is_overridden ? (item.override_product_brand || item.product_brand) : item.product_brand,
-      product_image_url: item.is_overridden ? (item.override_product_image_url || item.product_image_url) : item.product_image_url,
-      product_specs: JSON.parse(item.product_specs || '{}'),
-      rfp_image_base64: item.rfp_image_base64,
-      is_overridden: item.is_overridden || false,
-      override_product_url: item.override_product_url || null,
-    }));
+
+    const items = [];
+
+    for (const item of result.rows) {
+      const approvedIndices = item.approved_alternative_indices ?
+        (typeof item.approved_alternative_indices === 'string'
+          ? JSON.parse(item.approved_alternative_indices)
+          : item.approved_alternative_indices)
+        : [];
+
+      const alternatives = item.alternatives ?
+        (typeof item.alternatives === 'string'
+          ? JSON.parse(item.alternatives)
+          : item.alternatives)
+        : [];
+
+      // Build products array: override + primary match + approved alternatives
+      const products = [];
+
+      // Add override first if present
+      if (item.is_overridden && item.override_product_name) {
+        products.push({
+          product_name: item.override_product_name,
+          product_brand: item.override_product_brand || '',
+          product_image_url: item.override_product_image_url || null,
+          product_url: item.override_product_url || null,
+          product_specs: {},
+          confidence: 1.0,
+          match_source: 'override',
+        });
+      } else {
+        // Add primary match (main product) — always include unless overridden
+        products.push({
+          product_name: item.product_name,
+          product_brand: item.product_brand,
+          product_image_url: item.override_product_image_url || item.product_image_url,
+          product_url: item.product_source_url || null,
+          product_specs: JSON.parse(item.product_specs || '{}'),
+          confidence: item.confidence,
+          match_source: item.match_source,
+        });
+      }
+
+      // Add approved alternatives (on top of the primary match)
+      if (approvedIndices.length > 0 && alternatives.length > 0) {
+        for (const altIndex of approvedIndices) {
+          const alt = alternatives[altIndex - 1];
+          if (alt) {
+            products.push({
+              product_name: alt.product_name,
+              product_brand: alt.product_brand,
+              product_image_url: alt.selected_image_url || alt.product_image_url,
+              product_url: alt.product_url || null,
+              product_specs: alt.specs ? JSON.parse(JSON.stringify(alt.specs)) : {},
+              confidence: alt.similarity || item.confidence,
+              match_source: alt.match_source || item.match_source,
+            });
+          }
+        }
+      }
+
+      // Add item with all its products
+      if (products.length > 0) {
+        items.push({
+          rfp_line: item.rfp_line,
+          query: item.query,
+          description: item.description,
+          quantity: item.quantity,
+          location: item.location,
+          rfp_image_base64: item.rfp_image_base64,
+          primary_specs: JSON.parse(item.product_specs || '{}'),
+          products,
+          is_overridden: item.is_overridden || false,
+          override_product_url: item.override_product_url || null,
+        });
+      }
+    }
+
+    return items;
   }
 
   /**
    * Save an overridden product to the catalog with text + SigLIP embeddings
    */
-  async saveOverriddenProductToCatalog(productName, productBrand, productUrl, productImageUrl = null) {
+  async saveOverriddenProductToCatalog(productName, productBrand, productUrl, productImageUrl = null, metadata = {}) {
     const debugId = `OVERRIDE-${Date.now()}`;
+    const { category, description, dimensions, materials } = metadata;
 
     logger.info(`[${debugId}] ✨ Starting product catalog save`);
-    logger.info(`[${debugId}] Input: name="${productName}", brand="${productBrand}", url="${productUrl}", imageUrl="${productImageUrl ? 'yes' : 'no'}"`);
+    logger.info(`[${debugId}] Input: name="${productName}", brand="${productBrand}", url="${productUrl}", imageUrl="${productImageUrl ? 'yes' : 'no'}", category="${category || 'N/A'}", description="${description ? 'yes' : 'no'}", dimensions="${dimensions || 'N/A'}", materials="${materials || 'N/A'}"`);
 
     if (!productName || !productBrand || !productUrl) {
       logger.error(`[${debugId}] ❌ Insufficient data to save overridden product`, { productName, productBrand, productUrl });
@@ -283,14 +349,18 @@ class SessionService {
       let productId;
       try {
         const { rows: productRows } = await pool.query(
-          `INSERT INTO products (brand_id, name, slug, source_url, image_url, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+          `INSERT INTO products (brand_id, name, slug, source_url, image_url, category, description, dimensions, materials, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
            ON CONFLICT (brand_id, slug) DO UPDATE SET
              source_url = EXCLUDED.source_url,
              image_url = EXCLUDED.image_url,
+             category = COALESCE(EXCLUDED.category, products.category),
+             description = COALESCE(EXCLUDED.description, products.description),
+             dimensions = COALESCE(EXCLUDED.dimensions, products.dimensions),
+             materials = COALESCE(EXCLUDED.materials, products.materials),
              updated_at = NOW()
            RETURNING id`,
-          [brandId, productName, productSlug, productUrl, productImageUrl]
+          [brandId, productName, productSlug, productUrl, productImageUrl, category, description, dimensions, materials]
         );
         productId = productRows[0].id;
         logger.info(`[${debugId}]   ✅ Product saved: id=${productId}`);

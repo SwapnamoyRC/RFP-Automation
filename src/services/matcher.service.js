@@ -120,7 +120,8 @@ async function matchFromFile(imagePath, description = '', options = {}) {
   }
 
   // Wait for rate limit window to breathe after Step 0 + Step 1 embedding calls
-  await new Promise(r => setTimeout(r, 3000));
+  // Increased from 3s to 5s for better TPM management
+  await new Promise(r => setTimeout(r, 5000));
 
   logger.info('=== Step 2: AI Re-ranking ===');
   const reranked = await rerankCandidates(imagePath, enrichedDescription, candidates, 10);
@@ -160,7 +161,8 @@ async function matchFromFile(imagePath, description = '', options = {}) {
   }
 
   // Wait for rate limit window after Step 2 (reranker sends 15+ images)
-  await new Promise(r => setTimeout(r, 5000));
+  // Increased from 5s to 10s since reranking is the heaviest step (~50-80K tokens)
+  await new Promise(r => setTimeout(r, 10000));
 
   logger.info('=== Step 3: Final Verification ===');
   const verified = await verifyMatches(imagePath, enrichedDescription, reranked, 10);

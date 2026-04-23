@@ -12,6 +12,7 @@ function normalizeItem(row) {
     dimensions: row.dimensions || '',
     quantity: row.quantity,
     rfpImage: row.rfp_image_base64,
+    matchSource: row.match_source || 'hybrid_pipeline',
     matchedProduct: {
       name: row.product_name,
       brand: row.product_brand,
@@ -32,14 +33,21 @@ function normalizeItem(row) {
     overrideProductName: row.override_product_name || null,
     overrideProductBrand: row.override_product_brand || null,
     overrideProductImageUrl: row.override_product_image_url || null,
+    selectedImageUrl: row.override_product_image_url || null,
     alternatives: (row.alternatives || []).map(alt => ({
       name: alt.name || alt.product_name,
       brand: alt.brand || alt.product_brand,
       imageUrl: alt.imageUrl || alt.product_image_url || alt.image_url,
+      selectedImageUrl: alt.selected_image_url || null,
       description: alt.description || alt.product_specs,
       similarity: alt.similarity || alt.confidence,
       explanation: alt.explanation || null,
     })),
+    approvedAlternativeIndices: row.approved_alternative_indices ?
+      (typeof row.approved_alternative_indices === 'string'
+        ? JSON.parse(row.approved_alternative_indices)
+        : row.approved_alternative_indices)
+      : [],
   };
 }
 
@@ -142,11 +150,10 @@ export function useSession() {
       // Start polling for progress
       startPolling(sess.id);
 
-      return sess;
+      return result; // Return result with warnings for UI display
     } catch (err) {
       const msg = extractError(err);
       setError(msg);
-      toast.error(msg);
       setProcessing(false);
       throw err;
     } finally {
@@ -203,6 +210,110 @@ export function useSession() {
     await fetchHistory();
   }, [fetchHistory]);
 
+  const stopProcessing = useCallback(async (sessionId) => {
+    try {
+      // Immediately stop polling on frontend
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+
+      // Call backend to stop processing
+      await api.stopSession(sessionId);
+
+      // Wait a moment for backend to update, then refresh both session data and items
+      await new Promise(r => setTimeout(r, 1000));
+      const [refreshedSession, refreshedItems] = await Promise.all([
+        api.getSession(sessionId),
+        api.getSessionItems(sessionId),
+      ]);
+      setSession(refreshedSession);
+      const arr = Array.isArray(refreshedItems) ? refreshedItems : refreshedItems.items || [];
+      setItems(arr.map(normalizeItem));
+
+      // Set processing to false AFTER all data is updated (prevents "0" flash)
+      setProcessing(false);
+
+      toast.success('Processing stopped');
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg || 'Failed to stop processing');
+      setProcessing(false);
+    }
+  }, []);
+
+  const resumeProcessing = useCallback(async (sessionId) => {
+    try {
+      setProcessing(true);
+      const result = await api.resumeSession(sessionId);
+
+      // Wait 2 seconds for backend to update session status to 'processing'
+      // before starting polling
+      await new Promise(r => setTimeout(r, 2000));
+
+      // Start polling for the resumed items
+      startPolling(sessionId);
+
+      toast.success(`Resuming processing for ${result.unprocessedCount} items`);
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg || 'Failed to resume processing');
+      setProcessing(false);
+    }
+  }, [startPolling]);
+
+  const retryFailedItem = useCallback(async (sessionId, itemId) => {
+    try {
+      const result = await api.retryItem(sessionId, itemId);
+      // Refresh items to show updated status
+      await refreshItems(sessionId);
+
+      if (result.processed) {
+        toast.success('Item retry successful');
+      } else {
+        toast.success('Item retry started');
+      }
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg || 'Failed to retry item');
+    }
+  }, [refreshItems]);
+
+  const selectImage = useCallback(async (sessionId, itemId, imageUrl) => {
+    await api.selectProductImage(sessionId, itemId, imageUrl);
+    setItems(prev => prev.map(item =>
+      item.id === itemId ? { ...item, selectedImageUrl: imageUrl, overrideProductImageUrl: imageUrl } : item
+    ));
+  }, []);
+
+  const selectAltImage = useCallback(async (sessionId, itemId, altIndex, imageUrl) => {
+    // Optimistically update state immediately for instant UI feedback
+    setItems(prev => prev.map(item => {
+      if (item.id !== itemId) return item;
+      const newAlts = (item.alternatives || []).map((alt, i) =>
+        i === altIndex - 1 ? { ...alt, selectedImageUrl: imageUrl } : alt
+      );
+      return { ...item, alternatives: newAlts };
+    }));
+    try {
+      await api.selectAlternativeImage(sessionId, itemId, altIndex, imageUrl);
+    } catch (err) {
+      console.error('[selectAltImage] Failed to save:', err);
+    }
+  }, []);
+
+  const approveMultipleAlternatives = useCallback(async (sessionId, itemId, alternativeIndices) => {
+    try {
+      await api.approveMultipleAlternatives(sessionId, itemId, alternativeIndices);
+      // Refresh items to show updated approved alternatives
+      await refreshItems(sessionId);
+      toast.success(`${alternativeIndices.length} option(s) approved`);
+    } catch (err) {
+      const msg = extractError(err);
+      toast.error(msg || 'Failed to approve alternatives');
+    }
+  }, [refreshItems]);
+
   const loadSession = useCallback(async (sessionId) => {
     setLoading(true);
     try {
@@ -244,5 +355,11 @@ export function useSession() {
     loadSession,
     resumePollingIfNeeded,
     fetchHistory,
+    stopProcessing,
+    resumeProcessing,
+    retryFailedItem,
+    approveMultipleAlternatives,
+    selectImage,
+    selectAltImage,
   };
 }

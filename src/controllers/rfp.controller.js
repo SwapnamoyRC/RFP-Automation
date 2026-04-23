@@ -336,11 +336,12 @@ async function processRFPImagesBase64(req, res) {
 
   // Step 3: Build row-based lookup maps for images
   // Key by row number for O(1) lookup. Items without a matching image get text-only search.
+  // Note: img.row from vision service is 1-indexed (ExcelJS), _dataRow is 0-indexed (XLSX), so subtract 1
   const imageByRow = {};
   const imageDataByRow = {};
   for (const img of imageDescriptions) {
-    if (img.description) imageByRow[img.row] = img.description;
-    if (img.base64) imageDataByRow[img.row] = { base64: img.base64, extension: img.extension };
+    if (img.description) imageByRow[img.row - 1] = img.description;
+    if (img.base64) imageDataByRow[img.row - 1] = { base64: img.base64, extension: img.extension };
   }
 
   const imageRows = imageDescriptions.map(img => img.row).sort((a, b) => a - b);

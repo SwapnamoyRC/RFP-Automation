@@ -49,8 +49,66 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
     const approved = all.filter(i => i.status === 'approved');
     const rejected = all.filter(i => i.status === 'rejected');
     const pending = all.filter(i => !i.status || i.status === 'pending' || i.status === 'matched');
-    const avgConfidence = approved.length > 0
-      ? approved.reduce((sum, i) => sum + (i.matchedProduct?.confidence || i.matchedProduct?.similarity || 0), 0) / approved.length
+
+    // Expand approved items with override + alternatives
+    const expandedApproved = [];
+    for (const item of approved) {
+      const approvedIndices = item.approvedAlternativeIndices || [];
+      const products = [];
+
+      // Step 1: Add override first if exists
+      if (item.isOverridden && item.overrideProductName) {
+        products.push({
+          ...item,
+          _isExpandedAlt: false,
+          _isOverride: true,
+          matchedProduct: {
+            name: item.overrideProductName,
+            brand: item.overrideProductBrand,
+            imageUrl: item.overrideProductImageUrl,
+            confidence: 1.0,
+            similarity: 1.0,
+          },
+        });
+      }
+
+      // Step 2: Add approved alternatives
+      if (approvedIndices.length > 0 && item.alternatives && item.alternatives.length > 0) {
+        for (const altIndex of approvedIndices) {
+          const alt = item.alternatives[altIndex - 1];
+          if (alt) {
+            products.push({
+              ...item,
+              _isExpandedAlt: true,
+              _isOverride: false,
+              _altRank: approvedIndices.indexOf(altIndex) + 1,
+              selectedImageUrl: null, // alternatives have no independently picked image
+              matchedProduct: {
+                name: alt.name,
+                brand: alt.brand,
+                imageUrl: alt.selectedImageUrl || alt.imageUrl,
+                confidence: alt.similarity,
+                similarity: alt.similarity,
+              },
+            });
+          }
+        }
+      }
+
+      // Step 3: Always include the main product first, then any alternatives
+      if (products.length === 0) {
+        // No overrides or approved alternatives, use primary match only
+        expandedApproved.push(item);
+      } else {
+        // Add the main product first
+        expandedApproved.push(item);
+        // Then add all approved alternatives
+        expandedApproved.push(...products);
+      }
+    }
+
+    const avgConfidence = expandedApproved.length > 0
+      ? expandedApproved.reduce((sum, i) => sum + (i.matchedProduct?.confidence || i.matchedProduct?.similarity || 0), 0) / expandedApproved.length
       : 0;
 
     return {
@@ -58,7 +116,7 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
       approved: approved.length,
       rejected: rejected.length,
       pending: pending.length,
-      approvedItems: approved,
+      approvedItems: expandedApproved,
       avgConfidence,
     };
   }, [items]);
@@ -172,17 +230,17 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
         <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden mb-8">
           <div className="px-6 py-4 border-b border-gray-100">
             <h2 className="text-sm font-semibold text-gray-900">
-              Approved Items ({stats.approvedItems.length})
+              Approved Items ({stats.approved} item{stats.approved !== 1 ? 's' : ''} — {stats.approvedItems.length} product{stats.approvedItems.length !== 1 ? 's' : ''})
             </h2>
           </div>
           <div className="divide-y divide-gray-50">
             {stats.approvedItems.map((item, idx) => {
               const match = item.matchedProduct || {};
-              const displayImage = item.isOverridden && item.overrideProductImageUrl ? item.overrideProductImageUrl : (match.imageUrl || match.image_url);
-              const displayBrand = item.isOverridden ? item.overrideProductBrand : match.brand;
-              const displayName = item.isOverridden ? item.overrideProductName : match.name;
+              const displayImage = item.selectedImageUrl || (item._isOverride && item.overrideProductImageUrl ? item.overrideProductImageUrl : (match.imageUrl || match.image_url));
+              const displayBrand = item._isOverride ? item.overrideProductBrand : match.brand;
+              const displayName = item._isOverride ? item.overrideProductName : match.name;
               return (
-                <div key={item.id || idx} className="px-6 py-3 flex items-center gap-4 hover:bg-gray-50">
+                <div key={item.id ? `${item.id}-${idx}` : idx} className="px-6 py-3 flex items-center gap-4 hover:bg-gray-50">
                   <span className="text-xs text-gray-400 w-6 text-right">{idx + 1}</span>
                   {displayImage && (
                     <img
@@ -193,12 +251,22 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
                     />
                   )}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
+                    <p className="text-sm font-medium text-gray-900 truncate flex items-center gap-2">
                       {item.rfpItem || item.description}
+                      {item._isOverride && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-semibold whitespace-nowrap">
+                          Override
+                        </span>
+                      )}
+                      {item._isExpandedAlt && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary-100 text-primary-700 font-semibold whitespace-nowrap">
+                          Option {item._altRank}
+                        </span>
+                      )}
                     </p>
                     <p className="text-xs text-gray-500 truncate">
                       {displayBrand} {displayName}
-                      {item.isOverridden && <span className="ml-1 text-amber-600 text-[10px]">(overridden)</span>}
+                      {item._isOverride && <span className="ml-1 text-amber-600 text-[10px]">(overridden)</span>}
                     </p>
                   </div>
                   <div className="text-right shrink-0">
@@ -244,7 +312,7 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
           ) : (
             <>
               <Download className="w-4 h-4" />
-              Download PPTX ({stats.approved} items)
+              Download PPTX ({stats.approvedItems.length} product{stats.approvedItems.length !== 1 ? 's' : ''})
             </>
           )}
         </button>

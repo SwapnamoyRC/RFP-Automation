@@ -81,6 +81,13 @@ export async function selectAlternative(sessionId, itemId, alternativeIndex) {
   return data;
 }
 
+export async function approveMultipleAlternatives(sessionId, itemId, alternativeIndices) {
+  const { data } = await api.post(`/sessions/${sessionId}/items/${itemId}/approve-alternatives`, {
+    alternativeIndices,
+  });
+  return data;
+}
+
 export async function generatePPT(sessionId) {
   const response = await api.post(`/sessions/${sessionId}/generate`, {}, {
     responseType: 'blob',
@@ -106,10 +113,44 @@ export async function listSessions({ status, limit } = {}) {
   return data;
 }
 
-export async function overrideItem(sessionId, itemId, { productUrl, productName, productBrand, productImageUrl, note }) {
+export async function overrideItem(sessionId, itemId, { productUrl, productName, productBrand, category, description, dimensions, materials, productImageUrl, note }) {
   const { data } = await api.post(`/sessions/${sessionId}/items/${itemId}/override`, {
-    productUrl, productName, productBrand, productImageUrl, note,
+    productUrl, productName, productBrand, category, description, dimensions, materials, productImageUrl, note,
   });
+  return data;
+}
+
+export async function stopSession(sessionId) {
+  const { data } = await api.post(`/sessions/${sessionId}/stop`);
+  return data;
+}
+
+export async function resumeSession(sessionId) {
+  const { data } = await api.post(`/sessions/${sessionId}/resume`);
+  return data;
+}
+
+export async function retryItem(sessionId, itemId) {
+  const { data } = await api.post(`/sessions/${sessionId}/items/${itemId}/retry`);
+  return data;
+}
+
+export async function getProductImages(sessionId, itemId, { name, brand, altIndex } = {}) {
+  const params = {};
+  if (name) params.name = name;
+  if (brand) params.brand = brand;
+  if (altIndex) params.altIndex = altIndex;
+  const { data } = await api.get(`/sessions/${sessionId}/items/${itemId}/product-images`, { params });
+  return data;
+}
+
+export async function selectProductImage(sessionId, itemId, imageUrl) {
+  const { data } = await api.patch(`/sessions/${sessionId}/items/${itemId}/select-image`, { imageUrl });
+  return data;
+}
+
+export async function selectAlternativeImage(sessionId, itemId, altIndex, imageUrl) {
+  const { data } = await api.patch(`/sessions/${sessionId}/items/${itemId}/alternatives/${altIndex}/select-image`, { imageUrl });
   return data;
 }
 
