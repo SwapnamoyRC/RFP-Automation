@@ -135,11 +135,12 @@ export async function retryItem(sessionId, itemId) {
   return data;
 }
 
-export async function getProductImages(sessionId, itemId, { name, brand, altIndex } = {}) {
+export async function getProductImages(sessionId, itemId, { name, brand, altIndex, productId } = {}) {
   const params = {};
   if (name) params.name = name;
   if (brand) params.brand = brand;
   if (altIndex) params.altIndex = altIndex;
+  if (productId) params.productId = productId;
   const { data } = await api.get(`/sessions/${sessionId}/items/${itemId}/product-images`, { params });
   return data;
 }

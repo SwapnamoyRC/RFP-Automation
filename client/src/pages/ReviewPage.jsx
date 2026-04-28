@@ -878,6 +878,86 @@ function ImagePickerStrip({ sessionId, item, onImageSelected }) {
   );
 }
 
+// ── Override Image Picker — picks catalog image for an overridden item ─────────
+function OverrideImagePickerStrip({ sessionId, item, onImageSelected }) {
+  const [images, setImages] = useState([]);
+  const [selected, setSelected] = useState(item.selectedImageUrl || item.overrideProductImageUrl || null);
+  const [loading, setLoading] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const overrideName = item.overrideProductName;
+  const overrideBrand = item.overrideProductBrand;
+  const productKey = `${overrideName}|||${overrideBrand}`;
+  const prevKeyRef = useRef(productKey);
+
+  useEffect(() => {
+    if (prevKeyRef.current !== productKey) {
+      prevKeyRef.current = productKey;
+      setImages([]);
+      setSelected(item.selectedImageUrl || item.overrideProductImageUrl || null);
+      setModalOpen(false);
+    }
+  }, [productKey, item.selectedImageUrl, item.overrideProductImageUrl]);
+
+  // Parse catalog product UUID stored in override note — used for direct siglip lookup
+  const catalogProductId = (() => {
+    const m = (item.overrideNote || '').match(/Product ID:\s*([\w-]+)/);
+    return m ? m[1] : null;
+  })();
+
+  const openModal = async () => {
+    setModalOpen(true);
+    if (images.length > 0) return;
+    setLoading(true);
+    try {
+      const data = await getProductImages(sessionId, item.id, {
+        name: overrideName,
+        brand: overrideBrand,
+        productId: catalogProductId,
+      });
+      setImages(data.images || []);
+      setSelected(data.selected_image_url || item.overrideProductImageUrl || null);
+    } catch { /* ignore */ } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelect = async (url) => {
+    setSelected(url);
+    try {
+      await selectProductImage(sessionId, item.id, url);
+      onImageSelected(url);
+    } catch { /* ignore */ }
+  };
+
+  const isPicked = selected && selected !== item.overrideProductImageUrl;
+
+  return (
+    <>
+      <button
+        onClick={openModal}
+        disabled={loading}
+        className={`flex items-center gap-1 text-xs transition-colors mt-2 ${
+          isPicked ? 'text-primary-600 font-medium' : 'text-gray-400 hover:text-primary-600'
+        }`}
+      >
+        {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Images className="w-3 h-3" />}
+        {isPicked ? '✓ Image picked' : 'Pick PPT image'}
+      </button>
+      <ImagePickerModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        images={images}
+        selected={selected}
+        onSelect={handleSelect}
+        productName={overrideName}
+        productBrand={overrideBrand}
+        loading={loading}
+      />
+    </>
+  );
+}
+
 // ── Review Card ───────────────────────────────────────────────────────────────
 function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onApproveMultiple, onOverride, onRetryItem, onSelectImage, onSelectAltImage }) {
   const [expanded, setExpanded] = useState(false);
@@ -970,9 +1050,21 @@ function ReviewCard({ item, sessionId, onApprove, onReject, onSelectAlt, onAppro
           matchLabel={item.isOverridden ? "Overridden Match" : "Best Match"}
         />
 
-        {/* Image Picker — only for non-overridden items with a matched product */}
+        {/* Image Picker — non-overridden items with a matched product */}
         {!item.isOverridden && match.name && (
           <ImagePickerStrip
+            sessionId={sessionId}
+            item={item}
+            onImageSelected={(url) => {
+              setPickedImage(url);
+              onSelectImage && onSelectImage(sessionId, item.id, url);
+            }}
+          />
+        )}
+
+        {/* Image Picker — overridden items: pick catalog image for PPT */}
+        {item.isOverridden && (
+          <OverrideImagePickerStrip
             sessionId={sessionId}
             item={item}
             onImageSelected={(url) => {

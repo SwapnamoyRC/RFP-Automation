@@ -95,14 +95,16 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
         }
       }
 
-      // Step 3: Always include the main product first, then any alternatives
+      // Step 3: Build final product list
       if (products.length === 0) {
-        // No overrides or approved alternatives, use primary match only
+        // No override or alternatives — show primary match only
         expandedApproved.push(item);
+      } else if (item.isOverridden) {
+        // Override replaces the primary match entirely — skip original item
+        expandedApproved.push(...products);
       } else {
-        // Add the main product first
+        // Has approved alternatives but no override — show primary first, then alternatives
         expandedApproved.push(item);
-        // Then add all approved alternatives
         expandedApproved.push(...products);
       }
     }

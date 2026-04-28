@@ -244,6 +244,7 @@ class SessionService {
           product_specs: {},
           confidence: 1.0,
           match_source: 'override',
+          override_note: item.override_note || null,
         });
       } else {
         // Add primary match (main product) — always include unless overridden
@@ -344,25 +345,48 @@ class SessionService {
       const productSlug = `${baseSlug}-override-${Date.now().toString().slice(-6)}`;
       logger.info(`[${debugId}]   Product slug: "${productSlug}"`);
 
-      // 3. Upsert product
+      // 3. Upsert product — check by name+brand first to avoid slug-timestamped duplicates
       logger.info(`[${debugId}] 📌 Step 3: Upsert product to database...`);
       let productId;
       try {
-        const { rows: productRows } = await pool.query(
-          `INSERT INTO products (brand_id, name, slug, source_url, image_url, category, description, dimensions, materials, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-           ON CONFLICT (brand_id, slug) DO UPDATE SET
-             source_url = EXCLUDED.source_url,
-             image_url = EXCLUDED.image_url,
-             category = COALESCE(EXCLUDED.category, products.category),
-             description = COALESCE(EXCLUDED.description, products.description),
-             dimensions = COALESCE(EXCLUDED.dimensions, products.dimensions),
-             materials = COALESCE(EXCLUDED.materials, products.materials),
-             updated_at = NOW()
-           RETURNING id`,
-          [brandId, productName, productSlug, productUrl, productImageUrl, category, description, dimensions, materials]
+        // Check if product already exists by name + brand
+        const { rows: existing } = await pool.query(
+          `SELECT p.id FROM products p WHERE p.brand_id = $1 AND LOWER(p.name) = LOWER($2) LIMIT 1`,
+          [brandId, productName]
         );
-        productId = productRows[0].id;
+        if (existing[0]) {
+          productId = existing[0].id;
+          logger.info(`[${debugId}]   ✅ Product already exists: id=${productId}, skipping insert`);
+          // Update any missing fields
+          await pool.query(
+            `UPDATE products SET
+               source_url = COALESCE(source_url, $2),
+               image_url = COALESCE(image_url, $3),
+               category = COALESCE(category, $4),
+               description = COALESCE(description, $5),
+               dimensions = COALESCE(dimensions, $6),
+               materials = COALESCE(materials, $7),
+               updated_at = NOW()
+             WHERE id = $1`,
+            [productId, productUrl, productImageUrl, category, description, dimensions, materials]
+          );
+        } else {
+          const { rows: productRows } = await pool.query(
+            `INSERT INTO products (brand_id, name, slug, source_url, image_url, category, description, dimensions, materials, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+             ON CONFLICT (brand_id, slug) DO UPDATE SET
+               source_url = EXCLUDED.source_url,
+               image_url = EXCLUDED.image_url,
+               category = COALESCE(EXCLUDED.category, products.category),
+               description = COALESCE(EXCLUDED.description, products.description),
+               dimensions = COALESCE(EXCLUDED.dimensions, products.dimensions),
+               materials = COALESCE(EXCLUDED.materials, products.materials),
+               updated_at = NOW()
+             RETURNING id`,
+            [brandId, productName, productSlug, productUrl, productImageUrl, category, description, dimensions, materials]
+          );
+          productId = productRows[0].id;
+        }
         logger.info(`[${debugId}]   ✅ Product saved: id=${productId}`);
       } catch (err) {
         logger.error(`[${debugId}]   ❌ Product creation failed: ${err.message}`);

@@ -484,7 +484,9 @@ async function overrideItem(req, res) {
   );
 
   // Save the overridden product to the catalog with embeddings
-  if (productName && productBrand && productUrl) {
+  // Skip if product was selected from the existing catalog (already stored there)
+  const isFromCatalog = note && note.includes('Selected from catalog');
+  if (productName && productBrand && productUrl && !isFromCatalog) {
     logger.info(`[override] Starting catalog save for: ${productName} (${productBrand})`);
     try {
       const productId = await sessionService.saveOverriddenProductToCatalog(
@@ -533,71 +535,137 @@ async function getProductImages(req, res) {
   const { id, itemId } = req.params;
   const { pool: db } = require('../config/database');
 
-  // Get product name + brand from session item
   const itemResult = await db.query(
-    `SELECT product_name, product_brand, product_image_url, override_product_image_url, alternatives
+    `SELECT product_name, product_brand, product_image_url, override_product_image_url,
+            override_product_url, is_overridden, alternatives
      FROM rfp_session_items WHERE id = $1 AND session_id = $2`,
     [itemId, id]
   );
   if (!itemResult.rows[0]) return res.status(404).json({ error: 'Item not found' });
 
-  const { product_name, product_brand, product_image_url, override_product_image_url } = itemResult.rows[0];
+  const {
+    product_name, product_brand, product_image_url,
+    override_product_image_url, override_product_url, is_overridden,
+  } = itemResult.rows[0];
 
-  // Allow caller to override which product to look up (used for alternatives)
-  const lookupName = req.query.name || product_name;
-  const lookupBrand = req.query.brand || product_brand;
+  const altIndex = req.query.altIndex ? parseInt(req.query.altIndex) : null;
+  // productId is the catalog products.id passed from the frontend when overriding from catalog search
+  const productId = req.query.productId || null;
+  const isOverrideLookup = is_overridden && !altIndex;
 
-  // Query product_images (NaughtOne via product_families/variants) — fuzzy name match
-  const imgResult = await db.query(
-    `SELECT DISTINCT pi.image_url
-     FROM product_images pi
-     WHERE (
-       pi.family_id IN (
-         SELECT pf.id FROM product_families pf
-         JOIN brands b ON pf.brand_id = b.id
-         WHERE LOWER(b.name) ILIKE LOWER($2)
-           AND (
-             LOWER($1) ILIKE LOWER(pf.name) || ' %' OR LOWER($1) = LOWER(pf.name)
-             OR LOWER(pf.name) ILIKE LOWER($1) || ' %' OR LOWER(pf.name) = LOWER($1)
-           )
+  let images = [];
+
+  if (isOverrideLookup) {
+    // Strategy 0 — direct product_id lookup (catalog product ID stored in override note)
+    if (productId) {
+      const r = await db.query(
+        `SELECT DISTINCT image_url FROM product_siglip_images WHERE product_id = $1 LIMIT 30`,
+        [productId]
+      );
+      images = r.rows.map(row => row.image_url).filter(Boolean);
+    }
+
+    // Strategy 1 — look up via source_url match in products table
+    if (images.length === 0 && override_product_url) {
+      const r = await db.query(
+        `SELECT DISTINCT psi.image_url
+         FROM product_siglip_images psi
+         WHERE psi.product_id = (SELECT id FROM products WHERE source_url = $1 LIMIT 1)
+         LIMIT 30`,
+        [override_product_url]
+      );
+      images = r.rows.map(row => row.image_url).filter(Boolean);
+    }
+
+    // Strategy 2 — look up via the stored override image URL → find its product_id in siglip
+    if (images.length === 0 && override_product_image_url) {
+      const r = await db.query(
+        `SELECT DISTINCT psi.image_url
+         FROM product_siglip_images psi
+         WHERE psi.product_id = (
+           SELECT product_id FROM product_siglip_images WHERE image_url = $1 LIMIT 1
+         )
+         LIMIT 30`,
+        [override_product_image_url]
+      );
+      images = r.rows.map(row => row.image_url).filter(Boolean);
+    }
+
+    // Strategy 3 — exact product name + brand match in siglip (no fuzzy family lookup to
+    // avoid pulling in unrelated products from the same brand)
+    if (images.length === 0) {
+      const lookupName = req.query.name || product_name;
+      const lookupBrand = req.query.brand || product_brand;
+      const r = await db.query(
+        `SELECT DISTINCT psi.image_url
+         FROM product_siglip_images psi
+         JOIN products p ON psi.product_id = p.id
+         JOIN brands b ON p.brand_id = b.id
+         WHERE LOWER(p.name) = LOWER($1) AND LOWER(b.name) ILIKE LOWER($2)
+         LIMIT 30`,
+        [lookupName, lookupBrand]
+      );
+      images = r.rows.map(row => row.image_url).filter(Boolean);
+    }
+
+    // Last resort — if still nothing, show the override's own primary image so picker isn't empty
+    if (images.length === 0 && override_product_image_url) {
+      images = [override_product_image_url];
+    }
+  } else {
+    // Regular (non-override) items and alternatives: fuzzy family + exact siglip
+    const lookupName = req.query.name || product_name;
+    const lookupBrand = req.query.brand || product_brand;
+
+    const imgResult = await db.query(
+      `SELECT DISTINCT pi.image_url
+       FROM product_images pi
+       WHERE (
+         pi.family_id IN (
+           SELECT pf.id FROM product_families pf
+           JOIN brands b ON pf.brand_id = b.id
+           WHERE LOWER(b.name) ILIKE LOWER($2)
+             AND (
+               LOWER($1) ILIKE LOWER(pf.name) || ' %' OR LOWER($1) = LOWER(pf.name)
+               OR LOWER(pf.name) ILIKE LOWER($1) || ' %' OR LOWER(pf.name) = LOWER($1)
+             )
+         )
+         OR pi.variant_id IN (
+           SELECT pv.id FROM product_variants_v2 pv
+           JOIN brands b ON pv.brand_id = b.id
+           WHERE LOWER(b.name) ILIKE LOWER($2)
+             AND (
+               LOWER($1) ILIKE LOWER(pv.name) || ' %' OR LOWER($1) = LOWER(pv.name)
+               OR LOWER(pv.name) ILIKE LOWER($1) || ' %' OR LOWER(pv.name) = LOWER($1)
+             )
+         )
        )
-       OR pi.variant_id IN (
-         SELECT pv.id FROM product_variants_v2 pv
-         JOIN brands b ON pv.brand_id = b.id
-         WHERE LOWER(b.name) ILIKE LOWER($2)
-           AND (
-             LOWER($1) ILIKE LOWER(pv.name) || ' %' OR LOWER($1) = LOWER(pv.name)
-             OR LOWER(pv.name) ILIKE LOWER($1) || ' %' OR LOWER(pv.name) = LOWER($1)
-           )
-       )
-     )
-     LIMIT 30`,
-    [lookupName, lookupBrand]
-  );
+       LIMIT 30`,
+      [lookupName, lookupBrand]
+    );
 
-  // Query product_siglip_images (HAY, Muuto, Herman Miller, etc.) — direct product_id join
-  const siglipResult = await db.query(
-    `SELECT DISTINCT psi.image_url
-     FROM product_siglip_images psi
-     JOIN products p ON psi.product_id = p.id
-     JOIN brands b ON p.brand_id = b.id
-     WHERE LOWER(p.name) = LOWER($1) AND LOWER(b.name) ILIKE LOWER($2)
-     LIMIT 30`,
-    [lookupName, lookupBrand]
-  );
+    const siglipResult = await db.query(
+      `SELECT DISTINCT psi.image_url
+       FROM product_siglip_images psi
+       JOIN products p ON psi.product_id = p.id
+       JOIN brands b ON p.brand_id = b.id
+       WHERE LOWER(p.name) = LOWER($1) AND LOWER(b.name) ILIKE LOWER($2)
+       LIMIT 30`,
+      [lookupName, lookupBrand]
+    );
 
-  let images = [
-    ...imgResult.rows.map(r => r.image_url),
-    ...siglipResult.rows.map(r => r.image_url),
-  ].filter(Boolean);
+    images = [
+      ...imgResult.rows.map(r => r.image_url),
+      ...siglipResult.rows.map(r => r.image_url),
+    ].filter(Boolean);
 
-  // Prepend the primary product image_url if not already in list
-  if (product_image_url && !images.includes(product_image_url)) {
-    images = [product_image_url, ...images];
+    // Prepend matched product's primary image for non-override items only
+    if (product_image_url && !images.includes(product_image_url)) {
+      images = [product_image_url, ...images];
+    }
   }
 
   // For alternative lookups, report the alt's own selected_image_url if present
-  const altIndex = req.query.altIndex ? parseInt(req.query.altIndex) : null;
   let selectedImageUrl = override_product_image_url || product_image_url || null;
   if (altIndex !== null) {
     const alts = typeof itemResult.rows[0].alternatives === 'string'
@@ -605,6 +673,11 @@ async function getProductImages(req, res) {
       : (itemResult.rows[0].alternatives || []);
     const alt = alts[altIndex - 1];
     selectedImageUrl = alt?.selected_image_url || alt?.product_image_url || null;
+  } else if (isOverrideLookup) {
+    // Only report override_product_image_url as selected if it's actually in the returned images
+    selectedImageUrl = images.includes(override_product_image_url)
+      ? override_product_image_url
+      : (images[0] || null);
   }
 
   res.json({ images, selected_image_url: selectedImageUrl });
@@ -729,14 +802,23 @@ async function generateFromSession(req, res) {
   // Bulk-lookup source_url AND specs from products table for all products
   const { pool } = require('../config/database');
   const productLookupMap = {};
+  const catalogIdLookupMap = {};
   const allProductPairs = new Set();
+  const allCatalogIds = new Set();
+
   for (const item of approvedItems) {
     for (const product of (item.products || [])) {
       if (product.product_name && product.product_brand) {
         allProductPairs.add(`${product.product_name}|||${product.product_brand}`);
       }
+      // Collect catalog product IDs from override notes
+      if (product.override_note) {
+        const m = product.override_note.match(/Product ID:\s*([\w-]+)/);
+        if (m) allCatalogIds.add(m[1]);
+      }
     }
   }
+
   for (const pair of allProductPairs) {
     const [name, brand] = pair.split('|||');
     const { rows } = await pool.query(
@@ -745,10 +827,24 @@ async function generateFromSession(req, res) {
        FROM products p
        JOIN brands b ON p.brand_id = b.id
        WHERE LOWER(p.name) = LOWER($1) AND LOWER(b.name) = LOWER($2)
+       ORDER BY (p.description IS NOT NULL AND p.description != '') DESC
        LIMIT 1`,
       [name, brand]
     );
     if (rows[0]) productLookupMap[pair] = rows[0];
+  }
+
+  // Direct UUID lookup for override products (more reliable than name+brand)
+  for (const catalogId of allCatalogIds) {
+    const { rows } = await pool.query(
+      `SELECT p.source_url, p.materials, p.dimensions, p.category, p.description,
+              p.designer, p.name, b.name AS brand_name
+       FROM products p
+       JOIN brands b ON p.brand_id = b.id
+       WHERE p.id = $1`,
+      [catalogId]
+    );
+    if (rows[0]) catalogIdLookupMap[catalogId] = rows[0];
   }
 
   // Returns false for raw scraped tabular data (e.g. "MATERIAL | 63.13\n...")
@@ -766,7 +862,12 @@ async function generateFromSession(req, res) {
     // Process all products for this item
     const products = (item.products || []).map(product => {
       const lookupKey = `${product.product_name}|||${product.product_brand}`;
-      const dbProduct = productLookupMap[lookupKey] || {};
+      // For override products, prefer direct UUID lookup (avoids name+brand ambiguity)
+      let dbProduct = productLookupMap[lookupKey] || {};
+      if (product.override_note) {
+        const m = product.override_note.match(/Product ID:\s*([\w-]+)/);
+        if (m && catalogIdLookupMap[m[1]]) dbProduct = catalogIdLookupMap[m[1]];
+      }
       const sourceUrl = product.product_url || dbProduct.source_url || null;
 
       // Build specs: prefer stored product_specs, fall back to DB fields

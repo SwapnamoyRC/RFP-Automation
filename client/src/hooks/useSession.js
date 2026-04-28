@@ -33,6 +33,7 @@ function normalizeItem(row) {
     overrideProductName: row.override_product_name || null,
     overrideProductBrand: row.override_product_brand || null,
     overrideProductImageUrl: row.override_product_image_url || null,
+    overrideNote: row.override_note || null,
     selectedImageUrl: row.override_product_image_url || null,
     alternatives: (row.alternatives || []).map(alt => ({
       name: alt.name || alt.product_name,

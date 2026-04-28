@@ -111,76 +111,91 @@ async function generatePptx({ clientName, slides }) {
     const slide = pptx.addSlide();
     slide.background = { color: 'FFFFFF' };
 
+    // ── Layout constants ────────────────────────────────────────────────────────
+    const LEFT_X   = 0.30;
+    const LEFT_W   = 4.70;
+    const RIGHT_X  = 5.20;
+    const RIGHT_W  = 4.60;
+    const SPECS_Y  = 3.20;   // slightly lower to give RFP description more room
+
     // Dark header bar
     slide.addShape(pptx.ShapeType.rect, {
-      x: 0, y: 0, w: 10, h: 0.42, fill: { color: '1a1a2e' },
+      x: 0, y: 0, w: 10, h: 0.38, fill: { color: '1a1a2e' },
     });
 
-    // Item number label (top-left in header)
+    // Item counter in header
     slide.addText(`${i + 1} / ${slides.length}`, {
-      x: 0.2, y: 0.06, w: 1, h: 0.3,
+      x: 0.22, y: 0.06, w: 1.2, h: 0.26,
       fontSize: 8, color: '8888AA', fontFace: 'Calibri',
     });
 
-    const textX = 0.4;
-    const textW = 4.8;
-
-    // ── RFP Item Title ──────────────────────────────────────────────────
+    // ── Title ──────────────────────────────────────────────────────────────────
     const itemTitle = item.slide_title || item.query || 'Item';
-    slide.addText(itemTitle, {
-      x: textX, y: 0.40, w: textW, h: 0.55,
-      fontSize: 18, bold: true, color: '1a1a2e', fontFace: 'Calibri',
+    slide.addText(itemTitle.toUpperCase(), {
+      x: LEFT_X, y: 0.40, w: LEFT_W, h: 0.56,
+      fontSize: 16, bold: true, color: '1a1a2e', fontFace: 'Calibri',
+      valign: 'middle', wrap: true, shrinkText: true,
     });
 
-    // ── RFP Requirement block ───────────────────────────────────────
+    // ── RFP Requirement label + description ────────────────────────────────────
     slide.addText('RFP Requirement', {
-      x: textX, y: 0.98, w: textW, h: 0.22,
-      fontSize: 8, bold: true, color: '888888', fontFace: 'Calibri',
+      x: LEFT_X, y: 1.02, w: LEFT_W, h: 0.20,
+      fontSize: 8, bold: true, color: '999999', fontFace: 'Calibri',
     });
 
     const rfpLines = [];
     if (item.rfp_description || item.query) {
-      rfpLines.push({ text: item.rfp_description || item.query, options: { fontSize: 8.5, color: '222222' } });
+      rfpLines.push({ text: item.rfp_description || item.query, options: { fontSize: 8.5, color: '222222', paraSpaceAfter: 2 } });
     }
-    if (item.quantity) {
-      rfpLines.push({ text: `Quantity: ${item.quantity}`, options: { fontSize: 8, color: '555555' } });
-    }
-    if (item.location) {
-      rfpLines.push({ text: `Location: ${item.location}`, options: { fontSize: 8, color: '555555' } });
-    }
+    if (item.quantity) rfpLines.push({ text: `Quantity: ${item.quantity}`, options: { fontSize: 8, color: '555555' } });
+    if (item.location) rfpLines.push({ text: `Location: ${item.location}`, options: { fontSize: 8, color: '555555' } });
 
     if (rfpLines.length > 0) {
       slide.addText(rfpLines, {
-        x: textX, y: 1.22, w: textW, h: 0.65,
+        x: LEFT_X, y: 1.24, w: LEFT_W, h: 0.72,
         fontFace: 'Calibri', valign: 'top', wrap: true,
       });
     }
 
-    // ── RFP Reference Image (left column, compact) ─────────────────
+    // ── RFP Reference Image ────────────────────────────────────────────────────
+    // Label starts 0.14" after description ends (1.24 + 0.72 = 1.96 + 0.14 = 2.10)
+    const rfpImgW = 2.30;
+    const rfpRefLabelY = 2.10;
+    const rfpImgY = rfpRefLabelY + 0.20;   // 2.30
+    const rfpImgH = SPECS_Y - rfpImgY - 0.04;  // fills to specs line
+
+    slide.addText('RFP Reference', {
+      x: LEFT_X, y: rfpRefLabelY, w: rfpImgW, h: 0.18,
+      fontSize: 7, bold: true, color: 'BBBBBB', fontFace: 'Calibri', align: 'center',
+    });
+
     if (rfpImage) {
-      const rfpImgW = 2.2;
-      const rfpImgH = 1.2; // image: y 2.14 + h 1.2 = 3.34, clears specsY (3.45)
-      slide.addText('RFP Reference', {
-        x: textX, y: 1.94, w: rfpImgW, h: 0.18,
-        fontSize: 7, bold: true, color: 'AAAAAA', fontFace: 'Calibri', align: 'center',
-      });
       slide.addImage({
         data: `image/${rfpImage.ext};base64,${rfpImage.base64}`,
-        x: textX, y: 2.14, w: rfpImgW, h: rfpImgH,
+        x: LEFT_X, y: rfpImgY, w: rfpImgW, h: rfpImgH,
         sizing: { type: 'contain', w: rfpImgW, h: rfpImgH },
+      });
+    } else {
+      // Placeholder box when no RFP image
+      slide.addShape(pptx.ShapeType.rect, {
+        x: LEFT_X, y: rfpImgY, w: rfpImgW, h: rfpImgH,
+        fill: { color: 'F0F0F0' }, line: { color: 'DDDDDD', width: 1 },
+      });
+      slide.addText('No Image', {
+        x: LEFT_X, y: rfpImgY + rfpImgH / 2 - 0.13, w: rfpImgW, h: 0.25,
+        fontSize: 8, color: 'BBBBBB', fontFace: 'Calibri', align: 'center', italic: true,
       });
     }
 
-    // ── Approved Options Grid (right column, image + name + brand only) ──
-    const gridX = 5.3;
-    const gridW = 4.5;
+    // ── Approved Products Grid (right column) ──────────────────────────────────
     const numProducts = products.length;
-    const colCount = numProducts >= 3 ? 3 : numProducts >= 2 ? 2 : 1;
-    const colWidth = (gridW - 0.2) / colCount;
-    const rowHeight = numProducts >= 3 ? 1.75 : 2.0;
+    const colCount = Math.min(numProducts, 3);
+    const colWidth = (RIGHT_W - (colCount - 1) * 0.08) / colCount;
+    const cardStartY = 0.58;
+    const rowHeight = SPECS_Y - cardStartY - 0.10;   // compact: ~2.42 inches
 
     slide.addText('Recommended', {
-      x: gridX, y: 0.40, w: gridW, h: 0.20,
+      x: RIGHT_X, y: 0.40, w: RIGHT_W, h: 0.18,
       fontSize: 8, bold: true, color: 'AAAAAA', fontFace: 'Calibri', align: 'center',
     });
 
@@ -189,114 +204,119 @@ async function generatePptx({ clientName, slides }) {
       const prodImage = productImages[prodIdx];
       const colIdx = prodIdx % colCount;
       const rowIdx = Math.floor(prodIdx / colCount);
-      const cellX = gridX + (colIdx * colWidth) + 0.05;
-      const cellY = 0.63 + (rowIdx * rowHeight);
-      const cardW = colWidth - 0.1;
+      const cellX = RIGHT_X + colIdx * (colWidth + 0.08);
+      const cellY = cardStartY + rowIdx * (rowHeight + 0.08);
+      const cardW = colWidth;
 
+      // Card background
       slide.addShape(pptx.ShapeType.rect, {
         x: cellX, y: cellY, w: cardW, h: rowHeight,
-        fill: { color: 'F5F5F5' }, line: { color: 'DDDDDD', width: 1 },
+        fill: { color: 'F7F7F7' }, line: { color: 'E0E0E0', width: 0.75 },
       });
 
+      // Product image — takes up most of the card height
+      const imgPad   = 0.08;
+      const textZone = 0.76;   // reserved at bottom for name + brand + url
+      const imgH     = rowHeight - textZone - imgPad * 2;
+      const imgW     = cardW - imgPad * 2;
+
       if (prodImage) {
-        const imgW = cardW - 0.1;
-        const imgH = numProducts >= 3 ? 0.95 : 1.1;
         slide.addImage({
           data: `image/${prodImage.ext};base64,${prodImage.base64}`,
-          x: cellX + 0.05, y: cellY + 0.05, w: imgW, h: imgH,
+          x: cellX + imgPad, y: cellY + imgPad, w: imgW, h: imgH,
           sizing: { type: 'contain', w: imgW, h: imgH },
         });
       }
 
-      slide.addText(product.product_name || 'Product', {
-        x: cellX + 0.05, y: cellY + (numProducts >= 3 ? 1.03 : 1.2), w: cardW - 0.1, h: 0.25,
-        fontSize: numProducts >= 3 ? 7 : 8, bold: true, color: '222222', fontFace: 'Calibri',
-        align: 'center', valign: 'top', wrap: true,
+      // Thin separator between image and text zone
+      slide.addShape(pptx.ShapeType.line, {
+        x: cellX + 0.05, y: cellY + imgPad * 2 + imgH, w: cardW - 0.1, h: 0,
+        line: { color: 'E8E8E8', width: 0.5 },
       });
 
+      const textBaseY = cellY + rowHeight - textZone + 0.05;
+
+      // Product name
+      slide.addText(product.product_name || 'Product', {
+        x: cellX + 0.06, y: textBaseY, w: cardW - 0.12, h: 0.26,
+        fontSize: colCount >= 3 ? 7 : 8, bold: true, color: '1a1a2e',
+        fontFace: 'Calibri', align: 'center', valign: 'middle', wrap: true,
+      });
+
+      // Brand
       if (product.brand) {
         slide.addText(product.brand, {
-          x: cellX + 0.05, y: cellY + (numProducts >= 3 ? 1.30 : 1.5), w: cardW - 0.1, h: 0.14,
-          fontSize: 7, color: '666666', fontFace: 'Calibri', align: 'center',
+          x: cellX + 0.06, y: textBaseY + 0.26, w: cardW - 0.12, h: 0.20,
+          fontSize: colCount >= 3 ? 6.5 : 7, color: '777777',
+          fontFace: 'Calibri', align: 'center', valign: 'middle',
         });
       }
 
+      // URL link
       if (product.source_url) {
-        // Extract domain from URL for cleaner display
         try {
-          const urlObj = new URL(product.source_url);
-          const domain = urlObj.hostname.replace('www.', '');
-
+          const domain = new URL(product.source_url).hostname.replace('www.', '');
           slide.addText(domain, {
-            x: cellX + 0.05, y: cellY + (numProducts >= 3 ? 1.46 : 1.66), w: cardW - 0.1, h: 0.20,
-            fontSize: numProducts >= 3 ? 6.5 : 7, color: '0066CC', fontFace: 'Calibri', align: 'center',
-            wrap: true, valign: 'top', underline: true,
+            x: cellX + 0.06, y: textBaseY + 0.46, w: cardW - 0.12, h: 0.20,
+            fontSize: colCount >= 3 ? 6 : 6.5, color: '0066CC',
+            fontFace: 'Calibri', align: 'center', underline: true,
             hyperlink: { url: product.source_url, tooltip: 'Visit product page' },
           });
         } catch (e) {
-          // Fallback if URL parsing fails
           logger.warn(`Failed to parse URL: ${product.source_url}`, e.message);
         }
       }
     }
 
-    // ── Key Specifications — all products side by side at the bottom ──
-    // specsY must be below the RFP reference image (y:2.22 + h:1.1 = 3.32)
-    const specsY = 3.45;
-    // Cap height to fit 4 spec bullets — do not fill to slide bottom
-    const specsH = 1.8;
-    const totalSpecW = 9.4;
+    // ── Key Specifications ─────────────────────────────────────────────────────
+    const specsH = 1.85;
+    const totalSpecW = 9.40;
     const prodColW = totalSpecW / numProducts;
-    const maxSpecChars = 90; // truncate long spec lines
+    const maxSpecChars = 120;
 
     // Horizontal divider
     slide.addShape(pptx.ShapeType.line, {
-      x: 0.3, y: specsY - 0.12, w: 9.4, h: 0,
-      line: { color: 'DDDDDD', width: 0.75 },
+      x: LEFT_X, y: SPECS_Y - 0.07, w: totalSpecW, h: 0,
+      line: { color: 'D8D8D8', width: 0.75 },
     });
 
-    // Section header
     slide.addText('Key Specifications', {
-      x: 0.3, y: specsY, w: 9.4, h: 0.25,
-      fontSize: 9, bold: true, color: '888888', fontFace: 'Calibri',
+      x: LEFT_X, y: SPECS_Y, w: totalSpecW, h: 0.22,
+      fontSize: 8.5, bold: true, color: '888888', fontFace: 'Calibri',
     });
 
-    for (let i = 0; i < numProducts; i++) {
-      const product = products[i];
-      const colX = 0.3 + (i * prodColW);
+    for (let j = 0; j < numProducts; j++) {
+      const product = products[j];
+      const colX = LEFT_X + j * prodColW;
 
-      // Product name as column header
       slide.addText(product.product_name || '', {
-        x: colX, y: specsY + 0.28, w: prodColW - 0.1, h: 0.24,
-        fontSize: 9, bold: true, color: '1a1a2e', fontFace: 'Calibri',
+        x: colX, y: SPECS_Y + 0.25, w: prodColW - 0.12, h: 0.24,
+        fontSize: 8.5, bold: true, color: '1a1a2e', fontFace: 'Calibri', wrap: true,
       });
 
-      // Spec bullets — limit to 4 items, truncate long lines
-      const colSpecs = (product.specs || []).slice(0, 4).map(spec => {
-        const text = String(spec).trim();
-        return text.length > maxSpecChars ? text.slice(0, maxSpecChars) + '…' : text;
+      const colSpecs = (product.specs || []).slice(0, 4).map(s => {
+        const t = String(s).trim();
+        return t.length > maxSpecChars ? t.slice(0, maxSpecChars) + '…' : t;
       });
 
       if (colSpecs.length > 0) {
-        const specRows = colSpecs.map(spec => ({
-          text: spec,
-          options: { fontSize: 8, color: '333333', bullet: { code: '25A0', color: '4444AA' } },
-        }));
-        slide.addText(specRows, {
-          x: colX + 0.1, y: specsY + 0.55, w: prodColW - 0.2, h: specsH - 0.65,
-          fontFace: 'Calibri', valign: 'top', wrap: true,
-        });
+        slide.addText(
+          colSpecs.map(s => ({
+            text: s,
+            options: { fontSize: 7.5, color: '333333', bullet: { code: '25A0', color: '4444AA' } },
+          })),
+          { x: colX + 0.08, y: SPECS_Y + 0.52, w: prodColW - 0.18, h: specsH - 0.56, fontFace: 'Calibri', valign: 'top', wrap: true }
+        );
       } else {
         slide.addText('—', {
-          x: colX + 0.1, y: specsY + 0.55, w: prodColW - 0.2, h: 0.3,
+          x: colX + 0.08, y: SPECS_Y + 0.52, w: prodColW - 0.18, h: 0.26,
           fontSize: 8, color: '999999', fontFace: 'Calibri', italic: true,
         });
       }
 
-      // Vertical divider between columns (except last)
-      if (i < numProducts - 1) {
+      if (j < numProducts - 1) {
         slide.addShape(pptx.ShapeType.line, {
-          x: colX + prodColW - 0.05, y: specsY, w: 0, h: specsH,
+          x: colX + prodColW - 0.04, y: SPECS_Y, w: 0, h: specsH,
           line: { color: 'EEEEEE', width: 0.5 },
         });
       }
