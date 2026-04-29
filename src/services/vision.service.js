@@ -57,8 +57,14 @@ class VisionService {
       if (headerRow >= 0) {
         // Find where data ends (totals row)
         for (let i = dataStartRow; i < rows.length; i++) {
-          const joined = (rows[i] || []).map(c => String(c || '').toLowerCase()).join(' ');
-          if (joined.includes('total') || joined.includes('gst') || joined.includes('thank you') || joined.includes('terms')) {
+          const cells = (rows[i] || []).map(c => String(c || '').toLowerCase().trim());
+          const joined = cells.join(' ');
+          // Only stop on a standalone totals label — not on "Total no's" inside a description
+          const hasTotalsCell = cells.some(c =>
+            c === 'total' || c === 'grand total' || c === 'sub-total' || c === 'subtotal' ||
+            /^total (amount|value|cost|price|sum)/.test(c)
+          );
+          if (hasTotalsCell || joined.includes('gst') || joined.includes('thank you') || joined.includes('terms')) {
             dataEndRow = i;
             break;
           }

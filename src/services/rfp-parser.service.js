@@ -193,7 +193,7 @@ class RFPParserService {
     const headerShift = String(header[0] || '').trim() === '' ? 1 : 0;
 
     const colMap = this._mapColumns(header, {
-      sno: ['s no', 'sno', 'sr no', 'sl no', 'sl.no', '#', 'sr.no'],
+      sno: ['s no', 'sno', 's.no', 'sr no', 'sl no', 'sl.no', '#', 'sr.no'],
       description: ['description', 'product name', 'product'],
       qty: ['qty', 'quantity'],
       leadTime: ['lead time', 'lead time after po'],
@@ -221,6 +221,11 @@ class RFPParserService {
       // Stop at totals row
       if (this._isTotalsRow(row)) break;
       if (!desc && !sno) continue;
+
+      // Skip continuation/description rows in 2-row-per-item formats (e.g. LF.xlsx).
+      // When sno is mapped and a row has no serial number and no quantity, it's a
+      // detail row belonging to the previous item, not a new item.
+      if (colMap.sno !== undefined && !sno && this._parseQty(qty) === 0 && items.length > 0) continue;
 
       const parsed = this._parseDescription(String(desc || ''));
 
@@ -767,9 +772,19 @@ class RFPParserService {
    * Check if a row is a totals/summary row.
    */
   _isTotalsRow(row) {
-    const joined = row.map(c => String(c || '').toLowerCase()).join(' ');
-    return joined.includes('total') || joined.includes('gst') || joined.includes('sub-total')
-      || joined.includes('thank you') || joined.includes('terms & conditions');
+    const cells = row.map(c => String(c || '').toLowerCase().trim());
+    const joined = cells.join(' ');
+    // Only match rows where a cell IS a totals label — not rows that merely contain
+    // "total" inside a product description (e.g. "Total no's: 4 Nos")
+    const hasTotalsCell = cells.some(c =>
+      c === 'total' || c === 'grand total' || c === 'sub-total' || c === 'subtotal' ||
+      /^total (amount|value|cost|price|sum)/.test(c)
+    );
+    return hasTotalsCell
+      || joined.includes('gst')
+      || joined.includes('sub-total')
+      || joined.includes('thank you')
+      || joined.includes('terms & conditions');
   }
 
   /**
