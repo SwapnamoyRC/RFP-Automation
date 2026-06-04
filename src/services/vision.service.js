@@ -1,4 +1,3 @@
-const ExcelJS = require('exceljs');
 const openaiConfig = require('../config/openai');
 const logger = require('../config/logger');
 
@@ -6,13 +5,196 @@ logger.info('[vision] Using GPT-4o for image description');
 
 class VisionService {
   /**
+   * Extract images directly from the xlsx ZIP structure.
+   * More reliable than ExcelJS getImages() which fails on Excel Online/OneDrive files.
+   * Returns array of { row, col, base64, extension, size }
+   */
+  async _extractImagesViaZip(fileBuffer) {
+    const JSZip = require('jszip');
+    let zip;
+    try {
+      zip = await JSZip.loadAsync(fileBuffer);
+    } catch (e) {
+      logger.warn(`[image-extract-zip] Failed to open as ZIP: ${e.message}`);
+      return [];
+    }
+
+    const allPaths = Object.keys(zip.files).filter(p => !zip.files[p].dir);
+    const relevantPaths = allPaths.filter(p => p.includes('drawing') || p.includes('_rels') || p.includes('richData') || p.includes('cellImage'));
+    logger.info(`[image-extract-zip] ZIP structure (drawing/rels/rich): ${JSON.stringify(relevantPaths)}`);
+
+    // Build media map: filename -> { buffer, extension }
+    const imgExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'tiff', 'webp', 'emf', 'wmf']);
+    const mediaMap = {};
+    const mediaOrder = []; // ordered list of filenames for index-based fallback
+    // Natural numeric sort so image10 comes after image9, not after image1
+    const naturalSort = (a, b) => {
+      const numA = parseInt((a.match(/(\d+)(?=\.\w+$)/) || [0, 0])[1]);
+      const numB = parseInt((b.match(/(\d+)(?=\.\w+$)/) || [0, 0])[1]);
+      return numA - numB || a.localeCompare(b);
+    };
+    for (const p of allPaths.filter(p => p.startsWith('xl/media/')).sort(naturalSort)) {
+      const fname = p.split('/').pop();
+      const ext = (fname.split('.').pop() || 'png').toLowerCase();
+      if (!imgExts.has(ext)) continue;
+      const buf = await zip.files[p].async('nodebuffer');
+      if (buf.length < 2000) continue;
+      mediaMap[fname] = { buffer: buf, extension: ext === 'jpeg' ? 'jpg' : ext };
+      mediaOrder.push(fname);
+    }
+    logger.info(`[image-extract-zip] Found ${mediaOrder.length} media files in xl/media/`);
+    if (mediaOrder.length === 0) return [];
+
+    // Helper: parse all <Relationship> elements regardless of attribute order or self-closing style
+    function parseRels(xml) {
+      const rels = {};
+      // Match both self-closing <Relationship .../> and non-self-closing <Relationship ...>
+      const re = /<Relationship\b([^>]*?)(?:\/?>|>)/g;
+      let m;
+      while ((m = re.exec(xml)) !== null) {
+        const attrs = m[1];
+        const id = (attrs.match(/\bId="([^"]+)"/) || [])[1];
+        const type = (attrs.match(/\bType="([^"]+)"/) || [])[1];
+        const target = (attrs.match(/\bTarget="([^"]+)"/) || [])[1];
+        if (id) rels[id] = { type: type || '', target: target || '' };
+      }
+      return rels;
+    }
+
+    // Helper: position-based drawing XML parser.
+    // Works regardless of namespace prefix, anchor element name, or attribute order.
+    // Strategy: find all <*:from> positions + row numbers, find all r:embed positions + rIds,
+    // then for each embed find the nearest preceding from-block to get its row.
+    function parseDrawingAnchors(drawingXml, rIdToMedia, drawingLabel) {
+      const found = [];
+
+      // Collect all <*:from> blocks with their positions and row/col values
+      const fromItems = [];
+      const fromRe = /<[^:>\s]*:?from\b[^>]*>([\s\S]*?)<\/[^:>\s]*:?from>/g;
+      let fm;
+      while ((fm = fromRe.exec(drawingXml)) !== null) {
+        const block = fm[1];
+        const rowM = block.match(/<[^:>\s]*:?row\b[^>]*>(\d+)<\/[^:>\s]*:?row>/);
+        const colM = block.match(/<[^:>\s]*:?col\b[^>]*>(\d+)<\/[^:>\s]*:?col>/);
+        if (rowM) fromItems.push({ pos: fm.index, row: parseInt(rowM[1]), col: colM ? parseInt(colM[1]) : -1 });
+      }
+
+      // Collect all r:embed (or any ns:embed) occurrences with their positions
+      const embedItems = [];
+      const embedRe = /[a-z0-9]+:embed="(rId[^"]+)"/gi;
+      let em;
+      while ((em = embedRe.exec(drawingXml)) !== null) {
+        embedItems.push({ pos: em.index, rId: em[1] });
+      }
+
+      logger.info(`[image-extract-zip] ${drawingLabel}: ${fromItems.length} from-blocks, ${embedItems.length} embeds, ${Object.keys(rIdToMedia).length} rIdToMedia entries`);
+
+      if (fromItems.length === 0 || embedItems.length === 0) {
+        // Log a snippet to help diagnose the XML structure
+        logger.info(`[image-extract-zip] ${drawingLabel} XML snippet (first 800): ${drawingXml.substring(0, 800).replace(/\s+/g, ' ')}`);
+        return found;
+      }
+
+      // For each embed, find the from-block immediately before it (within the same anchor block)
+      for (const embed of embedItems) {
+        const precedingFroms = fromItems.filter(f => f.pos < embed.pos);
+        if (precedingFroms.length === 0) continue;
+        const fromItem = precedingFroms[precedingFroms.length - 1]; // nearest preceding from
+
+        const mediaFile = rIdToMedia[embed.rId];
+        if (!mediaFile || !mediaMap[mediaFile]) continue;
+        const { buffer, extension } = mediaMap[mediaFile];
+        // Drawing XML rows are 0-indexed; add 1 to match ExcelJS 1-indexed convention
+        // (controller does img.row - 1 to get _dataRow, so row=2 → _dataRow=1 = first data row)
+        found.push({ row: fromItem.row + 1, col: fromItem.col, base64: buffer.toString('base64'), extension, size: buffer.length });
+      }
+      return found;
+    }
+
+    const images = [];
+
+    // Strategy 1: worksheet rels → drawing file
+    const wsRelsPaths = allPaths.filter(p => /xl\/worksheets\/_rels\/.*\.rels$/.test(p));
+    logger.info(`[image-extract-zip] Worksheet rels: [${wsRelsPaths.join(', ')}]`);
+
+    for (const relsPath of wsRelsPaths) {
+      const relsXml = await zip.files[relsPath].async('text');
+      const wsRels = parseRels(relsXml);
+
+      for (const [, rel] of Object.entries(wsRels)) {
+        if (!rel.type.toLowerCase().includes('drawing')) continue;
+
+        let drawingPath = rel.target;
+        if (drawingPath.startsWith('../')) drawingPath = 'xl/' + drawingPath.slice(3);
+        else if (!drawingPath.startsWith('xl/')) drawingPath = 'xl/drawings/' + drawingPath.split('/').pop();
+
+        const drawingNum = (drawingPath.match(/drawing(\d+)/) || [])[1];
+        if (!drawingNum) continue;
+
+        const drawingRelsFile = zip.file(`xl/drawings/_rels/drawing${drawingNum}.xml.rels`);
+        if (!drawingRelsFile) { logger.info(`[image-extract-zip] Missing drawing rels for drawing${drawingNum}`); continue; }
+
+        const drawingRels = parseRels(await drawingRelsFile.async('text'));
+        const rIdToMedia = {};
+        for (const [dRId, dRel] of Object.entries(drawingRels)) {
+          rIdToMedia[dRId] = dRel.target.replace(/^.*[/\\]/, '');
+        }
+
+        const drawingFile = zip.file(drawingPath);
+        if (!drawingFile) { logger.info(`[image-extract-zip] Drawing file not found: ${drawingPath}`); continue; }
+
+        const drawingXml = await drawingFile.async('text');
+        const found = parseDrawingAnchors(drawingXml, rIdToMedia, `drawing${drawingNum}`);
+        images.push(...found);
+      }
+    }
+
+    // Strategy 2: scan all drawing files directly (if strategy 1 found nothing)
+    if (images.length === 0) {
+      logger.info('[image-extract-zip] Strategy 1 found 0 images, scanning all drawing files directly...');
+      const drawingPaths = allPaths.filter(p => /xl\/drawings\/drawing\d+\.xml$/.test(p));
+      logger.info(`[image-extract-zip] Drawing files: [${drawingPaths.join(', ')}]`);
+
+      for (const drawingPath of drawingPaths) {
+        const drawingNum = (drawingPath.match(/drawing(\d+)/) || [])[1];
+        const drawingRelsFile = zip.file(`xl/drawings/_rels/drawing${drawingNum}.xml.rels`);
+        if (!drawingRelsFile) continue;
+
+        const drawingRels = parseRels(await drawingRelsFile.async('text'));
+        const rIdToMedia = {};
+        for (const [dRId, dRel] of Object.entries(drawingRels)) {
+          rIdToMedia[dRId] = dRel.target.replace(/^.*[/\\]/, '');
+        }
+
+        const drawingXml = await zip.files[drawingPath].async('text');
+        const found = parseDrawingAnchors(drawingXml, rIdToMedia, `drawing${drawingNum}(direct)`);
+        images.push(...found);
+      }
+    }
+
+    // Strategy 3: index-based fallback — map sorted media files to data rows sequentially
+    // Used when drawing XML positioning completely fails (e.g., unusual anchor format)
+    if (images.length === 0 && mediaOrder.length > 0) {
+      logger.info(`[image-extract-zip] Anchor parsing found 0 images. Falling back to sequential media→row mapping.`);
+      // mediaOrder[0] → dataStartRow (row index 1 in 0-based), etc.
+      // We don't know dataStartRow here, so return with row=-1 and let the caller assign rows
+      for (let i = 0; i < mediaOrder.length; i++) {
+        const fname = mediaOrder[i];
+        const { buffer, extension } = mediaMap[fname];
+        images.push({ row: -1, col: 1, mediaIndex: i, base64: buffer.toString('base64'), extension, size: buffer.length });
+      }
+      logger.info(`[image-extract-zip] Fallback: returning ${images.length} images with row=-1 (index-based)`);
+    }
+
+    logger.info(`[image-extract-zip] Extracted ${images.length} positioned images`);
+    return images;
+  }
+
+  /**
    * Extract embedded images from an Excel buffer.
    * Returns array of { row, base64, extension }
    */
   async extractImagesFromExcel(fileBuffer) {
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(fileBuffer);
-
     // First pass: find the header row and image column using XLSX for text parsing
     const XLSX = require('xlsx');
     const wb = XLSX.read(fileBuffer, { type: 'buffer' });
@@ -75,48 +257,40 @@ class VisionService {
       }
     }
 
-    // Second pass: extract images from exceljs, filtering by location
+    // Second pass: extract images via direct ZIP parsing (handles Excel Online/OneDrive files)
+    const allZipImages = await this._extractImagesViaZip(fileBuffer);
     const rawImages = [];
 
-    for (const worksheet of workbook.worksheets) {
-      const wsImages = worksheet.getImages();
-      logger.info(`[image-extract] Found ${wsImages.length} raw images in sheet "${worksheet.name}"`);
-
-      for (const img of wsImages) {
-        const media = workbook.model.media.find(m => m.index === img.imageId);
-        if (!media || !media.buffer) continue;
-
-        const row = img.range?.tl?.nativeRow ?? img.range?.tl?.row ?? null;
-        const col = img.range?.tl?.nativeCol ?? img.range?.tl?.col ?? null;
-        if (row === null) continue;
-
-        const bufferSize = media.buffer.length;
-
-        // Skip tiny images (icons, decorations) — less than 2KB
-        if (bufferSize < 2000) {
-          logger.info(`[image-extract] Skipping tiny image at row ${row} col ${col} (${bufferSize} bytes)`);
-          continue;
-        }
+    // Check if we got index-based fallback results (row === -1)
+    const isFallback = allZipImages.length > 0 && allZipImages.every(img => img.row === -1);
+    if (isFallback) {
+      // dataStartRow is 0-indexed (XLSX); +1 converts to ExcelJS 1-indexed so img.row-1 == _dataRow
+      const start = dataStartRow >= 0 ? dataStartRow + 1 : 2;
+      for (let i = 0; i < allZipImages.length; i++) {
+        rawImages.push({ ...allZipImages[i], row: start + i, col: imageCol >= 0 ? imageCol : 1 });
+      }
+      logger.info(`[image-extract] Fallback: assigned ${rawImages.length} images to rows ${start}-${start + rawImages.length - 1}`);
+    } else {
+      for (const img of allZipImages) {
+        const { row, col } = img;
 
         // Skip images outside the data range (logos, signatures, stamps)
-        // Allow a small buffer past dataEndRow for images anchored on/near the totals row
         if (headerRow >= 0 && (row < dataStartRow || row > dataEndRow + 2)) {
           logger.info(`[image-extract] Skipping non-data image at row ${row} col ${col} (outside rows ${dataStartRow}-${dataEndRow - 1})`);
           continue;
         }
 
-        // Only take images from the exact image column
+        // Only take images from the exact image column (if header detected one)
         if (imageCol >= 0 && col !== null && col !== imageCol) {
           logger.info(`[image-extract] Skipping image at row ${row} col ${col} (not in image col ${imageCol})`);
           continue;
         }
 
-        const ext = media.extension || media.type || 'png';
-        const base64 = Buffer.from(media.buffer).toString('base64');
-
-        rawImages.push({ row, col, base64, extension: ext, size: bufferSize });
+        rawImages.push(img);
       }
     }
+
+    logger.info(`[image-extract] Found ${rawImages.length} raw images after filtering`);
 
     // When no explicit "Image" header was found (imageCol === -1),
     // auto-detect the primary image column by finding which column has the most images.
