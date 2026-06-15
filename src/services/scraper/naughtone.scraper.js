@@ -225,30 +225,36 @@ class NaughtoneScraper extends BaseScraper {
 
   async extractDimensions(page) {
     try {
-      // NaughtOne has spec tables with variant-specific dimensions
-      const tableData = await page.$$eval('table tr, .spec-row, .dimensions-row', rows =>
-        rows.map(row => {
-          const cells = row.querySelectorAll('td, th');
-          return Array.from(cells).map(c => c.textContent.trim());
-        }).filter(r => r.length > 0)
-      );
-
-      if (tableData.length > 0) {
-        return tableData.map(row => row.join(' | ')).join('\n');
-      }
-
-      // Fallback: try text content with dimension keywords
-      const dimText = await page.$$eval('*', els => {
-        for (const el of els) {
-          const text = el.textContent;
-          if (text && text.match(/\d+\s*(?:mm|cm)\s*(?:x|\|)\s*\d+/i) && text.length < 200) {
-            return text.trim();
-          }
+      // NaughtOne: "Sizes" is an H5 inside a .accordion-toggle div.
+      // Content is in the next sibling .accordion-collapse div as p.technical-text-sm elements.
+      // These p elements have <br> children so we clone + replace BRs before reading textContent.
+      const dimText = await page.evaluate(() => {
+        function textWithBR(el) {
+          const clone = el.cloneNode(true);
+          clone.querySelectorAll('br').forEach(br => br.replaceWith('\n'));
+          return clone.textContent.trim();
         }
-        return null;
+
+        const toggle = Array.from(document.querySelectorAll('.accordion-toggle'))
+          .find(t => { const h5 = t.querySelector('h5'); return h5 && /^sizes$/i.test(h5.textContent.trim()); });
+        if (!toggle) return null;
+
+        const targetId = toggle.getAttribute('data-target');
+        const collapse = (targetId && document.querySelector(targetId)) || toggle.nextElementSibling;
+        if (!collapse) return null;
+
+        const paras = Array.from(collapse.querySelectorAll('p.technical-text-sm'));
+        if (paras.length > 0) {
+          return paras.map(textWithBR).filter(Boolean).join('\n\n');
+        }
+
+        // Fallback: any paragraph containing mm
+        const mmParas = Array.from(collapse.querySelectorAll('p'))
+          .filter(p => /\d+\s*mm/i.test(p.textContent));
+        return mmParas.map(textWithBR).filter(Boolean).join('\n') || null;
       });
 
-      return dimText;
+      return dimText || null;
     } catch {
       return null;
     }
@@ -256,16 +262,39 @@ class NaughtoneScraper extends BaseScraper {
 
   async extractMaterials(page) {
     try {
-      const materialsText = await page.$$eval('*', els => {
-        for (const el of els) {
-          const text = el.textContent;
-          if (text && text.match(/\d+\.?\d*%/) && text.match(/foam|steel|wood|plywood|fabric/i) && text.length < 500) {
-            return text.trim();
+      // NaughtOne: "Material Percentage Split" accordion contains a Google Charts script.
+      // The data is in: var chartItems = [{"percentage":"63.13","label":"MELAMINE FACED MDF"}, ...]
+      const materialsText = await page.evaluate(() => {
+        const toggle = Array.from(document.querySelectorAll('.accordion-toggle'))
+          .find(t => /material percentage split/i.test(t.textContent.trim()));
+        if (!toggle) return null;
+
+        const targetId = toggle.getAttribute('data-target');
+        const collapse = (targetId && document.querySelector(targetId)) || toggle.nextElementSibling;
+        if (!collapse) return null;
+
+        // Parse chartItems JSON from the embedded <script> tag
+        const script = collapse.querySelector('script');
+        if (script) {
+          const match = script.textContent.match(/var chartItems\s*=\s*(\[[\s\S]*?\]);/);
+          if (match) {
+            try {
+              const items = JSON.parse(match[1]);
+              if (items.length > 0) {
+                return items.map(i => `${parseFloat(i.percentage)}% ${i.label.trim()}`).join(', ');
+              }
+            } catch {}
           }
         }
-        return null;
+
+        // Fallback: look for rendered legend items with % pattern
+        const legendItems = Array.from(collapse.querySelectorAll('p, span'))
+          .map(el => el.textContent.trim())
+          .filter(t => /^\d+\.?\d*%/.test(t) && t.length < 80);
+        return legendItems.length > 0 ? legendItems.join(', ') : null;
       });
-      return materialsText;
+
+      return materialsText || null;
     } catch {
       return null;
     }

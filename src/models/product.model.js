@@ -65,9 +65,11 @@ class ProductModel {
       conditions.push(`p.category = $${paramIndex++}`);
       params.push(category);
     }
+    let searchParamIndex = -1;
     if (search) {
       conditions.push(`(p.name ILIKE $${paramIndex} OR p.description ILIKE $${paramIndex} OR b.name ILIKE $${paramIndex})`);
       params.push(`%${search}%`);
+      searchParamIndex = paramIndex;
       paramIndex++;
     }
 
@@ -78,12 +80,17 @@ class ProductModel {
     const offset = (page - 1) * limit;
     params.push(limit, offset);
 
+    // When searching, rank name matches above description-only matches, then alphabetical
+    const orderBy = searchParamIndex >= 0
+      ? `CASE WHEN p.name ILIKE $${searchParamIndex} THEN 0 ELSE 1 END, p.name`
+      : `p.name`;
+
     const [dataResult, countResult] = await Promise.all([
       pool.query(
         `SELECT p.*, b.name AS brand_name, b.slug AS brand_slug
          FROM products p JOIN brands b ON b.id = p.brand_id
          ${where}
-         ORDER BY p.name
+         ORDER BY ${orderBy}
          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
         params
       ),

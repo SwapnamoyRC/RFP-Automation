@@ -12,6 +12,29 @@ import ConfirmDialog from '../components/ConfirmDialog';
 const CATEGORIES = ['Seating', 'Tables', 'Storage', 'Lighting', 'Accessories', 'Outdoor', 'Other'];
 
 // ── Product Modal ───────────────────────────────────────────────────────────
+function DimensionsDisplay({ dimensions }) {
+  const lines = dimensions.split('\n').map(l => l.trim()).filter(Boolean);
+
+  if (lines.length <= 1) {
+    return <p className="text-sm text-gray-600 whitespace-pre-wrap">{dimensions.trim()}</p>;
+  }
+
+  // Lines starting with dimension notation or weight are spec lines; everything else is a name/label
+  const isSpecLine = l => /^(?:w|d|h|dia|seat)\s*\d|^weight\s/i.test(l) || /\b(mm|kg|lb)\b|\(in\)/i.test(l);
+
+  return (
+    <div className="max-h-52 overflow-y-auto rounded-lg border border-gray-100 text-xs">
+      {lines.map((line, i) =>
+        isSpecLine(line) ? (
+          <div key={i} className="pl-6 pr-3 py-0.5 text-gray-500 font-mono">{line}</div>
+        ) : (
+          <div key={i} className={`px-3 py-1.5 text-gray-700 font-semibold bg-gray-50${i > 0 ? ' border-t border-gray-100' : ''}`}>{line}</div>
+        )
+      )}
+    </div>
+  );
+}
+
 function ProductModal({ product, onClose }) {
   if (!product) return null;
 
@@ -75,7 +98,7 @@ function ProductModal({ product, onClose }) {
           {product.dimensions && (
             <div className="mb-6">
               <h3 className="text-sm font-semibold text-gray-700 mb-2">Dimensions</h3>
-              <p className="text-sm text-gray-600">{product.dimensions}</p>
+              <DimensionsDisplay dimensions={product.dimensions} />
             </div>
           )}
 
