@@ -95,6 +95,13 @@ export async function generatePPT(sessionId) {
   return response.data;
 }
 
+export async function generateExcel(sessionId) {
+  const response = await api.post(`/sessions/${sessionId}/generate-excel`, {}, {
+    responseType: 'blob',
+  });
+  return response.data;
+}
+
 export async function getSession(sessionId) {
   const { data } = await api.get(`/sessions/${sessionId}`);
   return data;
@@ -152,6 +159,14 @@ export async function selectProductImage(sessionId, itemId, imageUrl) {
 
 export async function selectAlternativeImage(sessionId, itemId, altIndex, imageUrl) {
   const { data } = await api.patch(`/sessions/${sessionId}/items/${itemId}/alternatives/${altIndex}/select-image`, { imageUrl });
+  return data;
+}
+
+export async function visualSearch({ imageBase64, mimeType, query, limit = 12 }) {
+  const body = { limit };
+  if (imageBase64) { body.image_base64 = imageBase64; body.mime_type = mimeType || 'image/jpeg'; }
+  if (query) body.query = query;
+  const { data } = await api.post('/search/visual', body);
   return data;
 }
 

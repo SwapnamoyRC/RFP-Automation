@@ -26,6 +26,7 @@ export default function UploadPage({ onProcess }) {
     accept: {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
       'application/vnd.ms-excel': ['.xls'],
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
     },
     maxFiles: 1,
   });
@@ -130,8 +131,8 @@ export default function UploadPage({ onProcess }) {
         <input {...getInputProps()} />
         {file ? (
           <div className="flex flex-col items-center gap-3">
-            <div className="w-14 h-14 rounded-2xl bg-emerald-100 flex items-center justify-center">
-              <FileSpreadsheet className="w-7 h-7 text-emerald-600" />
+            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${file.name.endsWith('.pptx') ? 'bg-orange-100' : 'bg-emerald-100'}`}>
+              <FileSpreadsheet className={`w-7 h-7 ${file.name.endsWith('.pptx') ? 'text-orange-600' : 'text-emerald-600'}`} />
             </div>
             <div>
               <p className="text-sm font-semibold text-gray-900">{file.name}</p>
@@ -148,9 +149,9 @@ export default function UploadPage({ onProcess }) {
             </div>
             <div>
               <p className="text-sm font-medium text-gray-700">
-                {isDragActive ? 'Drop your file here' : 'Drag & drop your Excel file'}
+                {isDragActive ? 'Drop your file here' : 'Drag & drop your RFP file'}
               </p>
-              <p className="text-xs text-gray-400 mt-1">or click to browse &middot; .xlsx, .xls</p>
+              <p className="text-xs text-gray-400 mt-1">or click to browse &middot; .xlsx, .xls, .pptx</p>
             </div>
           </div>
         )}

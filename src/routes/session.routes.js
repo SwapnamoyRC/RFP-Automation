@@ -109,4 +109,7 @@ router.post('/:id/items/:itemId/retry', validateParams(itemParams), sessionContr
 // Generate PPT from approved items
 router.post('/:id/generate', validateParams(sessionIdParams), validate(generateBody), sessionController.generateFromSession);
 
+// Generate Excel from approved items
+router.post('/:id/generate-excel', validateParams(sessionIdParams), sessionController.generateExcelFromSession);
+
 module.exports = router;

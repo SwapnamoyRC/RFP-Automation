@@ -39,7 +39,7 @@ function StatusBadge({ status }) {
   );
 }
 
-export default function HistoryPage({ history = [], onLoadSession }) {
+export default function HistoryPage({ history = [], totalSessions, onLoadSession }) {
   const navigate = useNavigate();
 
   const handleResume = async (sessionId) => {
@@ -95,7 +95,7 @@ export default function HistoryPage({ history = [], onLoadSession }) {
               <FileSpreadsheet className="w-5 h-5 text-primary-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{history.length}</p>
+              <p className="text-2xl font-bold text-gray-900">{totalSessions ?? history.length}</p>
               <p className="text-xs text-gray-500">Total Sessions</p>
             </div>
           </div>

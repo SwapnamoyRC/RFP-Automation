@@ -47,6 +47,8 @@ class HayScraper extends BaseScraper {
       { path: '/products/accessories/indoor-living/home-decor', category: 'accessories' },
       { path: '/products/accessories/indoor-living/vases-plant-pots', category: 'accessories' },
       { path: '/products/accessories/outdoor-living', category: 'accessories' },
+      // New products page — catches latest additions across all categories
+      { path: '/products/furniture/new', category: 'other' },
     ];
   }
 
@@ -182,14 +184,17 @@ class HayScraper extends BaseScraper {
         });
       }
 
-      // Extract page text for spec extraction
-      const pageText = await page.evaluate(() => document.body.innerText.substring(0, 4000));
+      // Extract page text for spec extraction (extend to 8000 to capture more content)
+      const pageText = await page.evaluate(() => document.body.innerText.substring(0, 8000));
 
       // Extract designer from page text
       const designer = this.extractDesigner(pageText);
 
-      // Extract dimensions from page text
-      const dimensions = this.parseDimensions(pageText);
+      // Extract dimensions — HAY embeds dimensions in JSON-LD variant names:
+      // e.g. "Bella Coffee-Ø45 x H39-Tile red..." → "Ø45 x H39"
+      // Primary: parse from variant names. Fallback: parse page text.
+      const dimensions = this.extractDimensionsFromVariants(jsonLdData.variants)
+        || this.parseDimensions(pageText);
 
       // Extract materials from page text
       const materials = this.parseMaterials(pageText);
@@ -245,11 +250,44 @@ class HayScraper extends BaseScraper {
     }
   }
 
+  // HAY variant names encode dimensions between the first and second dash:
+  // "Bella Coffee-Ø45 x H39-Tile red..." → "Ø45 x H39"
+  // "Table-120 x 60 x H74-Black"        → "120 x 60 x H74"
+  // Names may contain HTML entities (e.g. &#216; for Ø) which are decoded here.
+  extractDimensionsFromVariants(variants) {
+    if (!variants || !variants.length) return null;
+    const decodeHtml = str => str
+      .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>');
+
+    const dimSet = new Set();
+    for (const v of variants) {
+      if (!v.name) continue;
+      const decoded = decodeHtml(v.name);
+      // Split by dash — dimension segment is index 1 (between product name and color/material)
+      const parts = decoded.split('-');
+      if (parts.length >= 2) {
+        const candidate = parts[1].trim();
+        // Must look like a dimension: contains digits and at least one size indicator
+        if (/\d/.test(candidate) && /[xX×HWDLØhwdl]/.test(candidate)) {
+          dimSet.add(candidate);
+        }
+      }
+    }
+    return dimSet.size > 0 ? [...dimSet].join(' / ') : null;
+  }
+
   parseDimensions(text) {
     if (!text) return null;
     const patterns = [
+      // Standard: "Width: 45 cm", "H = 39 cm", "Ø = 45 cm"
       /(?:width|height|depth|length|diameter|W|H|D|L|Ø)\s*[:=]\s*[\d.,]+\s*(?:cm|mm|in|")/gi,
-      /\d+[\s]*[xX×][\s]*\d+[\s]*(?:[xX×][\s]*\d+)?\s*(?:cm|mm|in)?/g
+      // Compact without unit: "Ø45", "H39", "W120 x D60 x H74"
+      /(?:Ø|[WHDL])\d+(?:\s*[xX×]\s*(?:Ø|[WHDL])?\d+)*/g,
+      // Standard cross-dims: "45 x 60 x 74 cm", "120 x 60 cm"
+      /\d+[\s]*[xX×][\s]*\d+[\s]*(?:[xX×][\s]*\d+)?\s*(?:cm|mm|in)?/g,
     ];
     const matches = [];
     for (const pattern of patterns) {

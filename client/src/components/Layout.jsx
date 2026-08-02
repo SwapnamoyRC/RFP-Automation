@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
-import { Upload, ClipboardCheck, BarChart3, Layers, History, LogOut, BookOpen } from 'lucide-react';
+import { Upload, ClipboardCheck, BarChart3, Layers, History, LogOut, BookOpen, Sparkles } from 'lucide-react';
 
 const navItems = [
   { to: '/', icon: Upload, label: 'Upload' },
@@ -7,6 +7,7 @@ const navItems = [
   { to: '/summary', icon: BarChart3, label: 'Summary' },
   { to: '/history', icon: History, label: 'History' },
   { to: '/catalog', icon: BookOpen, label: 'Catalog' },
+  { to: '/search', icon: Sparkles, label: 'Visual Search' },
 ];
 
 export default function Layout({ children, historyCount = 0, user, onLogout }) {

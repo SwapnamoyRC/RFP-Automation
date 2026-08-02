@@ -25,7 +25,9 @@ class SessionService {
       where += ` AND s.status = $${params.length}`;
     }
 
-    const query = `
+    // Run total count and paginated rows in parallel
+    const countQuery = `SELECT COUNT(*)::int AS total FROM rfp_sessions s ${where}`;
+    const rowsQuery = `
       SELECT s.id, s.user_id, s.status, s.client_name, s.file_name,
         s.threshold, s.approved_count, s.rejected_count, s.created_at, s.updated_at,
         s.started_at, s.completed_at, s.processing_time_ms,
@@ -40,10 +42,17 @@ class SessionService {
       GROUP BY s.id ORDER BY s.created_at DESC
       LIMIT $${params.length + 1}
     `;
-    params.push(limit);
+    const limitParams = [...params, limit];
 
-    const result = await pool.query(query, params);
-    return result.rows;
+    const [countResult, rowsResult] = await Promise.all([
+      pool.query(countQuery, params),
+      pool.query(rowsQuery, limitParams),
+    ]);
+
+    return {
+      sessions: rowsResult.rows,
+      total: countResult.rows[0]?.total ?? 0,
+    };
   }
 
   /**

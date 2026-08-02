@@ -3,6 +3,8 @@ const rfpParserService = require('../services/rfp-parser.service');
 const visionService = require('../services/vision.service');
 const { matchFromBase64, matchFromText, initSigLIPModel } = require('../services/matcher.service');
 const pptxGenerator = require('../services/pptx-generator.service');
+const excelGenerator = require('../services/excel-generator.service');
+const pptParser = require('../services/ppt-parser.service');
 const logger = require('../config/logger');
 
 // In-memory set of sessions that have been requested to stop
@@ -15,12 +17,12 @@ const stoppedSessions = new Set();
  */
 async function listSessions(req, res) {
   const { status, limit } = req.query;
-  const sessions = await sessionService.listSessions({
+  const result = await sessionService.listSessions({
     userId: req.user.id,
     status: status || undefined,
     limit: limit ? parseInt(limit) : 50,
   });
-  res.json(sessions);
+  res.json(result);
 }
 
 /**
@@ -91,14 +93,19 @@ async function processSession(req, res) {
   const base64Clean = fileBase64.includes(',') ? fileBase64.split(',').pop() : fileBase64;
   const fileBuffer = Buffer.from(base64Clean, 'base64');
 
-  // Parse Excel synchronously (fast) to validate before starting background work
+  // Parse the uploaded file — route to the appropriate parser
+  const isPPTX = /\.pptx$/i.test(fileName || '');
   let parsed;
   try {
-    parsed = rfpParserService.parse(fileBuffer, fileName);
-    logger.info(`[session-process] Session ${id}: parsed ${parsed.items.length} items`);
+    if (isPPTX) {
+      parsed = await pptParser.parsePPTX(fileBuffer, fileName);
+    } else {
+      parsed = rfpParserService.parse(fileBuffer, fileName);
+    }
+    logger.info(`[session-process] Session ${id}: parsed ${parsed.items.length} items (format: ${isPPTX ? 'pptx' : 'excel'})`);
   } catch (err) {
     await sessionService.updateSession(id, { status: 'error' });
-    return res.status(400).json({ error: 'Failed to parse Excel', detail: err.message });
+    return res.status(400).json({ error: 'Failed to parse file', detail: err.message });
   }
 
   // Check if parsing found warnings (format issues)
@@ -127,7 +134,7 @@ async function processSession(req, res) {
   await sessionService.updateSession(id, {
     status: 'processing',
     file_name: fileName,
-    file_base64: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${base64Clean}`,
+    file_base64: `data:${isPPTX ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'};base64,${base64Clean}`,
     total_items: parsed.items.length,
     threshold,
     image_weight: imageWeight,
@@ -160,44 +167,60 @@ async function processInBackground(sessionId, fileBuffer, parsed, threshold, ima
   // Sequential processing with a small gap is more reliable and avoids costly retries.
   const CONCURRENCY = 1;
 
-  // Extract images
-  let extractedImages = [];
-  try {
-    extractedImages = await visionService.extractImagesFromExcel(fileBuffer);
-    logger.info(`[session-process] Session ${sessionId}: ${extractedImages.length} images extracted`);
-  } catch (err) {
-    logger.error(`[session-process] Image extraction failed: ${err.message}`);
-  }
-
-  const imageDataByRow = {};
-  for (const img of extractedImages) {
-    if (img.base64) imageDataByRow[img.row - 1] = { base64: img.base64, extension: img.extension };
-  }
-
-  // Build image-to-item mapping (exact match + nearest unmatched fallback)
-  const sortedImageRows = Object.keys(imageDataByRow).map(Number).sort((a, b) => a - b);
+  // Build image-to-item mapping
   const itemImageMap = {};
+  const isPPTXFile = parsed.meta?.format === 'pptx';
 
-  for (let i = 0; i < parsed.items.length; i++) {
-    if (imageDataByRow[parsed.items[i]._dataRow]) {
-      itemImageMap[i] = imageDataByRow[parsed.items[i]._dataRow];
-    }
-  }
-
-  const assignedImageRows = new Set(Object.values(itemImageMap).map(img => {
-    for (const [r, data] of Object.entries(imageDataByRow)) { if (data === img) return Number(r); }
-    return -1;
-  }));
-  for (const imgRow of sortedImageRows.filter(r => !assignedImageRows.has(r))) {
-    let bestItem = -1, bestDist = Infinity;
+  if (isPPTXFile) {
+    // PPT parser pre-embeds images in each item's rfp_image_base64 field — use them directly
     for (let i = 0; i < parsed.items.length; i++) {
-      if (itemImageMap[i]) continue;
-      const dist = Math.abs(imgRow - parsed.items[i]._dataRow);
-      if (dist < bestDist) { bestDist = dist; bestItem = i; }
+      const b64 = parsed.items[i].rfp_image_base64;
+      if (b64) {
+        const m = b64.match(/^data:image\/(\w+);base64,(.+)$/s);
+        if (m) {
+          itemImageMap[i] = { base64: m[2], extension: m[1] };
+          logger.info(`[session-process] PPT item ${i} has embedded image (${m[1]})`);
+        }
+      }
     }
-    if (bestItem >= 0) {
-      itemImageMap[bestItem] = imageDataByRow[imgRow];
-      logger.info(`[session-process] Image row ${imgRow} -> item ${bestItem} ("${parsed.items[bestItem].query.substring(0, 30)}")`);
+  } else {
+    // Excel: extract images from ZIP and match to items by row number
+    let extractedImages = [];
+    try {
+      extractedImages = await visionService.extractImagesFromExcel(fileBuffer);
+      logger.info(`[session-process] Session ${sessionId}: ${extractedImages.length} images extracted`);
+    } catch (err) {
+      logger.error(`[session-process] Image extraction failed: ${err.message}`);
+    }
+
+    const imageDataByRow = {};
+    for (const img of extractedImages) {
+      if (img.base64) imageDataByRow[img.row - 1] = { base64: img.base64, extension: img.extension };
+    }
+
+    const sortedImageRows = Object.keys(imageDataByRow).map(Number).sort((a, b) => a - b);
+
+    for (let i = 0; i < parsed.items.length; i++) {
+      if (imageDataByRow[parsed.items[i]._dataRow]) {
+        itemImageMap[i] = imageDataByRow[parsed.items[i]._dataRow];
+      }
+    }
+
+    const assignedImageRows = new Set(Object.values(itemImageMap).map(img => {
+      for (const [r, data] of Object.entries(imageDataByRow)) { if (data === img) return Number(r); }
+      return -1;
+    }));
+    for (const imgRow of sortedImageRows.filter(r => !assignedImageRows.has(r))) {
+      let bestItem = -1, bestDist = Infinity;
+      for (let i = 0; i < parsed.items.length; i++) {
+        if (itemImageMap[i]) continue;
+        const dist = Math.abs(imgRow - parsed.items[i]._dataRow);
+        if (dist < bestDist) { bestDist = dist; bestItem = i; }
+      }
+      if (bestItem >= 0) {
+        itemImageMap[bestItem] = imageDataByRow[imgRow];
+        logger.info(`[session-process] Image row ${imgRow} -> item ${bestItem} ("${parsed.items[bestItem].query.substring(0, 30)}")`);
+      }
     }
   }
 
@@ -937,6 +960,139 @@ async function generateFromSession(req, res) {
 }
 
 /**
+ * POST /api/sessions/:id/generate-excel
+ * Generate and download an Excel (.xlsx) of approved items
+ */
+async function generateExcelFromSession(req, res) {
+  const { id } = req.params;
+  const session = await sessionService.getSession(id);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+
+  const clientName = req.body.clientName || session.client_name || 'Client';
+  const approvedItems = await sessionService.getApprovedItemsForPPT(id);
+
+  if (approvedItems.length === 0) {
+    return res.status(400).json({ error: 'No approved items to generate Excel from' });
+  }
+
+  const { pool } = require('../config/database');
+  const productLookupMap = {};
+  const catalogIdLookupMap = {};
+  const allProductPairs = new Set();
+  const allCatalogIds = new Set();
+
+  for (const item of approvedItems) {
+    for (const product of (item.products || [])) {
+      if (product.product_name && product.product_brand) {
+        allProductPairs.add(`${product.product_name}|||${product.product_brand}`);
+      }
+      if (product.override_note) {
+        const m = product.override_note.match(/Product ID:\s*([\w-]+)/);
+        if (m) allCatalogIds.add(m[1]);
+      }
+    }
+  }
+
+  for (const pair of allProductPairs) {
+    const [name, brand] = pair.split('|||');
+    const { rows } = await pool.query(
+      `SELECT p.source_url, p.materials, p.dimensions, p.category, p.description,
+              p.designer, p.name, b.name AS brand_name
+       FROM products p
+       JOIN brands b ON p.brand_id = b.id
+       WHERE LOWER(p.name) = LOWER($1) AND LOWER(b.name) = LOWER($2)
+       ORDER BY (p.description IS NOT NULL AND p.description != '') DESC
+       LIMIT 1`,
+      [name, brand]
+    );
+    if (rows[0]) productLookupMap[pair] = rows[0];
+  }
+
+  for (const catalogId of allCatalogIds) {
+    const { rows } = await pool.query(
+      `SELECT p.source_url, p.materials, p.dimensions, p.category, p.description,
+              p.designer, p.name, b.name AS brand_name
+       FROM products p
+       JOIN brands b ON p.brand_id = b.id
+       WHERE p.id = $1`,
+      [catalogId]
+    );
+    if (rows[0]) catalogIdLookupMap[catalogId] = rows[0];
+  }
+
+  const isCleanSpecValue = (val) => {
+    const s = String(val).trim();
+    if (!s) return false;
+    if (/\|\s*\d+\.?\d*/.test(s)) return false;
+    if (s.includes('\n') && s.includes('|')) return false;
+    return true;
+  };
+
+  const slides = approvedItems.map(item => {
+    const products = (item.products || []).map(product => {
+      const lookupKey = `${product.product_name}|||${product.product_brand}`;
+      let dbProduct = productLookupMap[lookupKey] || {};
+      if (product.override_note) {
+        const m = product.override_note.match(/Product ID:\s*([\w-]+)/);
+        if (m && catalogIdLookupMap[m[1]]) dbProduct = catalogIdLookupMap[m[1]];
+      }
+      const sourceUrl = product.product_url || dbProduct.source_url || null;
+
+      let specs = Object.entries(product.product_specs || {})
+        .filter(([, v]) => v && isCleanSpecValue(v))
+        .map(([k, v]) => `${k.charAt(0).toUpperCase() + k.slice(1)}: ${String(v).trim()}`);
+
+      if (specs.length === 0 && dbProduct) {
+        if (dbProduct.materials && isCleanSpecValue(dbProduct.materials)) specs.push(`Materials: ${dbProduct.materials}`);
+        if (dbProduct.dimensions && isCleanSpecValue(dbProduct.dimensions)) specs.push(`Dimensions: ${dbProduct.dimensions}`);
+        if (dbProduct.category) specs.push(`Category: ${dbProduct.category}`);
+      }
+
+      const dbDetails = {};
+      if (dbProduct.category) dbDetails.category = dbProduct.category;
+      if (dbProduct.materials && isCleanSpecValue(dbProduct.materials)) dbDetails.materials = dbProduct.materials;
+      if (dbProduct.dimensions) dbDetails.dimensions = dbProduct.dimensions;
+      if (dbProduct.designer) dbDetails.designer = dbProduct.designer;
+      if (dbProduct.description) dbDetails.description = dbProduct.description;
+
+      return {
+        product_name: product.product_name,
+        brand: product.product_brand,
+        confidence: product.confidence,
+        image_url: product.product_image_url,
+        source_url: sourceUrl,
+        specs,
+        dbDetails,
+      };
+    });
+
+    return {
+      slide_title: item.query,
+      rfp_description: item.description || item.query,
+      quantity: item.quantity,
+      location: item.location,
+      rfp_image_url: item.rfp_image_base64,
+      products,
+    };
+  });
+
+  try {
+    const excelBuffer = await excelGenerator.generateExcel({ clientName, slides });
+
+    const fileName = `RFP_Response_${clientName.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`;
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Length': excelBuffer.length,
+    });
+    res.send(excelBuffer);
+  } catch (err) {
+    logger.error(`[session] Excel generation failed for session ${id}: ${err.message}`);
+    res.status(500).json({ error: 'Failed to generate Excel', detail: err.message });
+  }
+}
+
+/**
  * POST /api/sessions/:id/items/:itemId/select-alternative
  * Select an alternative match for an item
  * Body: { alternativeIndex } (1-based rank from alternatives array)
@@ -1354,6 +1510,7 @@ module.exports = {
   selectAlternative,
   approveMultipleAlternatives,
   generateFromSession,
+  generateExcelFromSession,
   overrideItem,
   getProductImages,
   selectProductImage,

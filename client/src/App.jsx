@@ -8,6 +8,7 @@ import ReviewPage from './pages/ReviewPage';
 import SummaryPage from './pages/SummaryPage';
 import HistoryPage from './pages/HistoryPage';
 import CatalogPage from './pages/CatalogPage';
+import VisualSearchPage from './pages/VisualSearchPage';
 import { useSession } from './hooks/useSession';
 import { useAuth } from './hooks/useAuth';
 
@@ -21,6 +22,7 @@ function App() {
     progress,
     error,
     history,
+    totalSessions,
     createAndProcess,
     refreshItems,
     approveItem,
@@ -30,6 +32,7 @@ function App() {
     selectImage,
     selectAltImage,
     downloadPPT,
+    downloadExcel,
     loadSession,
     resumePollingIfNeeded,
     fetchHistory,
@@ -66,7 +69,7 @@ function App() {
   }
 
   return (
-    <Layout historyCount={history.length} user={auth.user} onLogout={auth.logout}>
+    <Layout historyCount={totalSessions || history.length} user={auth.user} onLogout={auth.logout}>
       <Toaster position="top-right" richColors closeButton />
       <Routes>
         <Route
@@ -103,6 +106,7 @@ function App() {
               items={items}
               session={session}
               onDownloadPPT={downloadPPT}
+              onDownloadExcel={downloadExcel}
               history={history}
             />
           }
@@ -112,6 +116,7 @@ function App() {
           element={
             <HistoryPage
               history={history}
+              totalSessions={totalSessions}
               onLoadSession={loadSession}
             />
           }
@@ -119,6 +124,10 @@ function App() {
         <Route
           path="/catalog"
           element={<CatalogPage user={auth.user} />}
+        />
+        <Route
+          path="/search"
+          element={<VisualSearchPage />}
         />
         <Route path="/login" element={<Navigate to="/" replace />} />
       </Routes>

@@ -40,9 +40,10 @@ function formatDuration(ms) {
   return `${mins}m ${secs}s`;
 }
 
-export default function SummaryPage({ items, session, onDownloadPPT, history = [] }) {
+export default function SummaryPage({ items, session, onDownloadPPT, onDownloadExcel, history = [] }) {
   const navigate = useNavigate();
   const [downloading, setDownloading] = useState(false);
+  const [downloadingExcel, setDownloadingExcel] = useState(false);
 
   const stats = useMemo(() => {
     const all = items || [];
@@ -136,6 +137,18 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
       toast.error(extractError(err, 'Failed to generate PPT'));
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleDownloadExcel = async () => {
+    if (!session?.id) return;
+    setDownloadingExcel(true);
+    try {
+      await onDownloadExcel(session.id);
+    } catch (err) {
+      toast.error(extractError(err, 'Failed to generate Excel'));
+    } finally {
+      setDownloadingExcel(false);
     }
   };
 
@@ -295,29 +308,52 @@ export default function SummaryPage({ items, session, onDownloadPPT, history = [
         <FileSpreadsheet className="w-10 h-10 text-white/80 mx-auto mb-3" />
         <h2 className="text-lg font-bold text-white mb-1">Generate Proposal</h2>
         <p className="text-sm text-primary-200 mb-6">
-          Export approved items as a PowerPoint presentation ready for your client.
+          Export approved items as a PowerPoint presentation or Excel spreadsheet.
         </p>
-        <button
-          onClick={handleDownload}
-          disabled={downloading || stats.approved === 0}
-          className={`inline-flex items-center gap-2 px-8 py-3 rounded-xl text-sm font-semibold transition-all ${
-            downloading || stats.approved === 0
-              ? 'bg-white/20 text-white/50 cursor-not-allowed'
-              : 'bg-white text-primary-700 hover:bg-primary-50 shadow-lg'
-          }`}
-        >
-          {downloading ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Generating...
-            </>
-          ) : (
-            <>
-              <Download className="w-4 h-4" />
-              Download PPTX ({stats.approvedItems.length} product{stats.approvedItems.length !== 1 ? 's' : ''})
-            </>
-          )}
-        </button>
+        <div className="flex items-center justify-center gap-3 flex-wrap">
+          <button
+            onClick={handleDownload}
+            disabled={downloading || stats.approved === 0}
+            className={`inline-flex items-center gap-2 px-7 py-3 rounded-xl text-sm font-semibold transition-all ${
+              downloading || stats.approved === 0
+                ? 'bg-white/20 text-white/50 cursor-not-allowed'
+                : 'bg-white text-primary-700 hover:bg-primary-50 shadow-lg'
+            }`}
+          >
+            {downloading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4" />
+                Download PPTX ({stats.approvedItems.length} product{stats.approvedItems.length !== 1 ? 's' : ''})
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleDownloadExcel}
+            disabled={downloadingExcel || stats.approved === 0}
+            className={`inline-flex items-center gap-2 px-7 py-3 rounded-xl text-sm font-semibold transition-all ${
+              downloadingExcel || stats.approved === 0
+                ? 'bg-white/20 text-white/50 cursor-not-allowed'
+                : 'bg-white/15 text-white border border-white/30 hover:bg-white/25 shadow-lg'
+            }`}
+          >
+            {downloadingExcel ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Generating...
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4" />
+                Download Excel ({stats.approvedItems.length} product{stats.approvedItems.length !== 1 ? 's' : ''})
+              </>
+            )}
+          </button>
+        </div>
         {stats.pending > 0 && (
           <p className="text-xs text-primary-300 mt-3">
             {stats.pending} items still pending review

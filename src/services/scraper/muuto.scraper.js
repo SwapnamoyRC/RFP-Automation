@@ -6,6 +6,7 @@ class MuutoScraper extends BaseScraper {
   // Main category pages to scan for sub-categories
   getTopCategoryUrls() {
     return [
+      '/products/news/',
       '/products/seating/',
       '/products/sofas/',
       '/products/tables/',
@@ -225,24 +226,23 @@ class MuutoScraper extends BaseScraper {
       const variantSuffix = subtitle || urlVariant;
       const fullName = variantSuffix ? `${nameData} ${variantSuffix}` : nameData;
 
-      // Click "Product information" to expand specs
+      // Click product info accordion — try both old and new Muuto page layout names
       await page.evaluate(() => {
+        const labels = ['Product information', 'Product description'];
         const buttons = document.querySelectorAll('button.accordion__trigger');
         for (const btn of buttons) {
-          if (btn.textContent.trim() === 'Product information') {
-            btn.click();
-            break;
-          }
+          if (labels.includes(btn.textContent.trim())) { btn.click(); break; }
         }
       });
       await page.waitForTimeout(1000);
 
-      // Extract product info content
+      // Extract product info content (old: 'Product information', new: 'Product description')
       const productInfo = await page.evaluate(() => {
+        const labels = ['Product information', 'Product description'];
         const sections = document.querySelectorAll('.accordion');
         for (const section of sections) {
           const trigger = section.querySelector('.accordion__trigger');
-          if (trigger && trigger.textContent.trim() === 'Product information') {
+          if (trigger && labels.includes(trigger.textContent.trim())) {
             const content = section.querySelector('.accordion__content');
             return content ? content.textContent.trim() : null;
           }
@@ -250,23 +250,22 @@ class MuutoScraper extends BaseScraper {
         return null;
       });
 
-      // Click "Material information" to expand
+      // Click material accordion — try both old and new layout names
       await page.evaluate(() => {
+        const labels = ['Material information', 'Product Material'];
         const buttons = document.querySelectorAll('button.accordion__trigger');
         for (const btn of buttons) {
-          if (btn.textContent.trim() === 'Material information') {
-            btn.click();
-            break;
-          }
+          if (labels.includes(btn.textContent.trim())) { btn.click(); break; }
         }
       });
       await page.waitForTimeout(1000);
 
       const materialInfo = await page.evaluate(() => {
+        const labels = ['Material information', 'Product Material'];
         const sections = document.querySelectorAll('.accordion');
         for (const section of sections) {
           const trigger = section.querySelector('.accordion__trigger');
-          if (trigger && trigger.textContent.trim() === 'Material information') {
+          if (trigger && labels.includes(trigger.textContent.trim())) {
             const content = section.querySelector('.accordion__content');
             return content ? content.textContent.trim() : null;
           }
@@ -298,15 +297,15 @@ class MuutoScraper extends BaseScraper {
         return null;
       });
 
-      // Extract description
-      const description = await page.evaluate(() => {
-        const el = document.querySelector('.usp-spot__description, .product-description, [class*="product-text"]');
-        if (el) return el.textContent.trim();
-
-        // Try from the product info section
-        const descEl = document.querySelector('[class*="product-desc"]');
-        return descEl ? descEl.textContent.trim() : null;
-      });
+      // Description: prefer accordion content (new layout) — avoids sustainability boilerplate
+      const description = (() => {
+        if (productInfo && productInfo.length > 40 &&
+            !productInfo.startsWith('At Muuto, we aim') &&
+            !productInfo.includes('take responsibility for our operations')) {
+          return productInfo.substring(0, 1000);
+        }
+        return null; // fallback handled in return below
+      })();
 
       // Extract designer
       const designer = await page.evaluate(() => {
@@ -322,17 +321,36 @@ class MuutoScraper extends BaseScraper {
         return null;
       });
 
-      // Extract main product image
-      const imageUrl = await page.evaluate(() => {
+      // Extract main product image — supports old CDN (azurefd/digitalassets) and
+      // new CDN (cdn.occtoo-media.com used on redesigned product pages)
+      const imageUrl = await page.evaluate((pageUrl) => {
         const imgs = Array.from(document.querySelectorAll('img[src]'));
-        const productImg = imgs.find(img =>
-          img.src.includes('digitalassets') &&
-          !img.src.includes('logo') &&
-          !img.src.includes('flag') &&
-          img.naturalWidth > 100
+        const slug = (pageUrl.match(/\/product\/(.+?)\/?$/) || [])[1]?.toLowerCase() || '';
+
+        // 1. New CDN: occtoo-media.com — prefer image whose filename matches product slug
+        const occtooSlug = imgs
+          .filter(img => img.src.includes('occtoo-media.com') && img.src.toLowerCase().includes(slug) && img.naturalWidth >= 500)
+          .sort((a, b) => b.naturalWidth - a.naturalWidth);
+        if (occtooSlug.length) return occtooSlug[0].src;
+
+        // 2. Any high-res occtoo image
+        const occtooAny = imgs
+          .filter(img => img.src.includes('occtoo-media.com') && img.naturalWidth >= 1000)
+          .sort((a, b) => b.naturalWidth - a.naturalWidth);
+        if (occtooAny.length) return occtooAny[0].src;
+
+        // 3. Old CDN: azurefd/digitalassets
+        const old = imgs.find(img =>
+          img.src.includes('digitalassets') && !img.src.includes('logo') && !img.src.includes('flag') && img.naturalWidth > 100
         );
-        return productImg ? productImg.src : null;
-      });
+        if (old) return old.src;
+
+        // 4. Muuto CDN-CGI (Cloudflare image resize)
+        const cdnCgi = imgs.find(img =>
+          img.src.includes('cdn-cgi/image') && img.src.includes('globalassets') && !img.src.includes('logo')
+        );
+        return cdnCgi ? cdnCgi.src : null;
+      }, url);
 
       // Extract PDF / fact sheet link
       // Muuto has: direct PDF links, digitalshowroom downloads, and "Download product fact sheet" buttons
@@ -373,7 +391,7 @@ class MuutoScraper extends BaseScraper {
       return {
         name: fullName,
         slug: slugify(fullName),
-        description: description || (productInfo ? productInfo.substring(0, 500) : null),
+        description: description || (productInfo && !productInfo.startsWith('At Muuto') ? productInfo.substring(0, 500) : null),
         dimensions,
         materials,
         image_url: imageUrl,

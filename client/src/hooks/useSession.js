@@ -60,13 +60,23 @@ export function useSession() {
   const [progress, setProgress] = useState(null); // { status, total_items, processed_items }
   const [error, setError] = useState(null);
   const [history, setHistory] = useState([]);
+  const [totalSessions, setTotalSessions] = useState(0);
   const pollRef = useRef(null);
 
   const fetchHistory = useCallback(async () => {
     if (!localStorage.getItem('token')) return; // skip if not logged in
     try {
-      const sessions = await api.listSessions({ limit: 100 });
-      setHistory(Array.isArray(sessions) ? sessions : []);
+      const result = await api.listSessions({ limit: 100 });
+      // Backend now returns { sessions: [], total: N }
+      if (result && result.sessions) {
+        setHistory(result.sessions);
+        setTotalSessions(result.total ?? result.sessions.length);
+      } else {
+        // Fallback if backend still returns a plain array
+        const arr = Array.isArray(result) ? result : [];
+        setHistory(arr);
+        setTotalSessions(arr.length);
+      }
     } catch (err) {
       console.error('[fetchHistory] Failed to load session history:', err);
     }
@@ -211,6 +221,18 @@ export function useSession() {
     await fetchHistory();
   }, [fetchHistory]);
 
+  const downloadExcel = useCallback(async (sessionId) => {
+    const blob = await api.generateExcel(sessionId);
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `RFP-Proposal-${String(sessionId).slice(0, 8)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  }, []);
+
   const stopProcessing = useCallback(async (sessionId) => {
     try {
       // Immediately stop polling on frontend
@@ -345,7 +367,7 @@ export function useSession() {
     session, setSession,
     items, setItems,
     loading, processing, progress, error,
-    history,
+    history, totalSessions,
     createAndProcess,
     refreshItems,
     approveItem,
@@ -353,6 +375,7 @@ export function useSession() {
     pickAlternative,
     overrideItem,
     downloadPPT,
+    downloadExcel,
     loadSession,
     resumePollingIfNeeded,
     fetchHistory,
