@@ -174,14 +174,19 @@ class HayScraper extends BaseScraper {
       if (!imageUrl) {
         imageUrl = await page.evaluate(() => {
           const imgs = Array.from(document.querySelectorAll('img[src]'));
+          // Only accept real product images from the inriver CDN — NOT editorial/brandsite blocks
           const productImg = imgs.find(img =>
-            img.src.includes('globalassets') &&
+            img.src.includes('/inriver/integration/service/') &&
             !img.src.includes('logo') &&
             !img.src.includes('flag') &&
             !img.src.includes('{{')  // skip template placeholders
           );
           return productImg ? productImg.src : null;
         });
+      }
+      // Guard: reject editorial/brandsite images even if JSON-LD returned one
+      if (imageUrl && imageUrl.includes('/blocks/brandsite/')) {
+        imageUrl = null;
       }
 
       // Extract page text for spec extraction (extend to 8000 to capture more content)

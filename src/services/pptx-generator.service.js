@@ -152,16 +152,17 @@ async function generatePptx({ clientName, slides }) {
 
     if (rfpLines.length > 0) {
       slide.addText(rfpLines, {
-        x: LEFT_X, y: 1.24, w: LEFT_W, h: 0.72,
-        fontFace: 'Calibri', valign: 'top', wrap: true,
+        x: LEFT_X, y: 1.24, w: LEFT_W, h: 0.86,
+        fontFace: 'Calibri', valign: 'top', wrap: true, shrinkText: true,
       });
     }
 
     // ── RFP Reference Image ────────────────────────────────────────────────────
-    // Label starts 0.14" after description ends (1.24 + 0.72 = 1.96 + 0.14 = 2.10)
+    // Description ends at 1.24 + 0.86 = 2.10; label 0.12" below → 2.22; image at 2.42.
+    // Image height fills to the specs divider: 3.20 - 2.42 - 0.04 = 0.74".
     const rfpImgW = 2.30;
-    const rfpRefLabelY = 2.10;
-    const rfpImgY = rfpRefLabelY + 0.20;   // 2.30
+    const rfpRefLabelY = 2.22;
+    const rfpImgY = rfpRefLabelY + 0.20;   // 2.42
     const rfpImgH = SPECS_Y - rfpImgY - 0.04;  // fills to specs line
 
     slide.addText('RFP Reference', {
@@ -216,7 +217,7 @@ async function generatePptx({ clientName, slides }) {
 
       // Product image — takes up most of the card height
       const imgPad   = 0.08;
-      const textZone = 0.76;   // reserved at bottom for name + brand + url
+      const textZone = 0.54;   // reserved at bottom for name + brand only (no URL)
       const imgH     = rowHeight - textZone - imgPad * 2;
       const imgW     = cardW - imgPad * 2;
 
@@ -252,27 +253,15 @@ async function generatePptx({ clientName, slides }) {
         });
       }
 
-      // URL link
-      if (product.source_url) {
-        try {
-          const domain = new URL(product.source_url).hostname.replace('www.', '');
-          slide.addText(domain, {
-            x: cellX + 0.06, y: textBaseY + 0.46, w: cardW - 0.12, h: 0.20,
-            fontSize: colCount >= 3 ? 6 : 6.5, color: '0066CC',
-            fontFace: 'Calibri', align: 'center', underline: true,
-            hyperlink: { url: product.source_url, tooltip: 'Visit product page' },
-          });
-        } catch (e) {
-          logger.warn(`Failed to parse URL: ${product.source_url}`, e.message);
-        }
-      }
+      // URL link moved to slide notes — not shown on slide
     }
 
     // ── Key Specifications ─────────────────────────────────────────────────────
+    // Shows only: product name, dimensions, materials, full description.
+    // All other details (URL, category, designer, price, etc.) are in slide notes.
     const specsH = 1.85;
     const totalSpecW = 9.40;
     const prodColW = totalSpecW / numProducts;
-    const maxSpecChars = 120;
 
     // Horizontal divider
     slide.addShape(pptx.ShapeType.line, {
@@ -287,29 +276,43 @@ async function generatePptx({ clientName, slides }) {
 
     for (let j = 0; j < numProducts; j++) {
       const product = products[j];
+      const db = product.dbDetails || {};
       const colX = LEFT_X + j * prodColW;
 
+      // Product name
       slide.addText(product.product_name || '', {
         x: colX, y: SPECS_Y + 0.25, w: prodColW - 0.12, h: 0.24,
         fontSize: 8.5, bold: true, color: '1a1a2e', fontFace: 'Calibri', wrap: true,
       });
 
-      const colSpecs = (product.specs || []).slice(0, 4).map(s => {
-        const t = String(s).trim();
-        return t.length > maxSpecChars ? t.slice(0, maxSpecChars) + '…' : t;
-      });
+      // Collapse multi-line dimension/material strings into one line (scrapers emit multiple
+      // size variants across lines). Description stays full — shrinkText handles overflow.
+      const oneLine = str => (str || '').split('\n').map(l => l.trim()).filter(Boolean).join(' · ');
+      const specLines = [];
+      if (db.dimensions)  specLines.push({ label: 'Dimensions',  value: oneLine(db.dimensions) });
+      if (db.materials)   specLines.push({ label: 'Materials',   value: oneLine(db.materials)  });
+      if (db.description) specLines.push({ label: 'Description', value: db.description });
 
-      if (colSpecs.length > 0) {
-        slide.addText(
-          colSpecs.map(s => ({
-            text: s,
-            options: { fontSize: 7.5, color: '333333', bullet: { code: '25A0', color: '4444AA' } },
-          })),
-          { x: colX + 0.08, y: SPECS_Y + 0.52, w: prodColW - 0.18, h: specsH - 0.56, fontFace: 'Calibri', valign: 'top', wrap: true }
-        );
+      if (specLines.length > 0) {
+        const richSpecLines = [];
+        specLines.forEach((spec, si) => {
+          if (si > 0) richSpecLines.push({ text: '\n', options: { fontSize: 3 } });
+          richSpecLines.push({
+            text: spec.label + ': ',
+            options: { fontSize: 7.5, bold: true, color: '444466' },
+          });
+          richSpecLines.push({
+            text: spec.value,
+            options: { fontSize: 7.5, bold: false, color: '333333' },
+          });
+        });
+        slide.addText(richSpecLines, {
+          x: colX + 0.06, y: SPECS_Y + 0.52, w: prodColW - 0.14, h: specsH - 0.56,
+          fontFace: 'Calibri', valign: 'top', wrap: true, shrinkText: true,
+        });
       } else {
         slide.addText('—', {
-          x: colX + 0.08, y: SPECS_Y + 0.52, w: prodColW - 0.18, h: 0.26,
+          x: colX + 0.06, y: SPECS_Y + 0.52, w: prodColW - 0.14, h: 0.26,
           fontSize: 8, color: '999999', fontFace: 'Calibri', italic: true,
         });
       }
